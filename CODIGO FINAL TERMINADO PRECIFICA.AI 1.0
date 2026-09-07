@@ -1,0 +1,2551 @@
+import sys
+import pandas as pd
+import re
+import numpy as np
+from PyQt5 import QtWidgets, QtGui, QtCore
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+from datetime import datetime
+import locale
+import logging
+
+# Configuração de logging para depuração
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
+
+# --- Configuração de Localização para Português Brasileiro ---
+try:
+    locale.setlocale(locale.LC_TIME, 'pt_BR.UTF-8')
+except locale.Error:
+    locale.setlocale(locale.LC_TIME, '')
+
+
+# --- Funções Auxiliares ---
+def normalizar_texto(texto):
+    try:
+        texto = str(texto).lower()
+        texto = re.sub(r'\s+', ' ', texto)
+        texto = re.sub(r'[^\w\s.\\()-/+]', '', texto)
+        return texto.strip()
+    except Exception:
+        return ""
+
+
+def extrair_preco(valor):
+    try:
+        # Verifica se o valor é NaN ou None primeiro
+        if pd.isna(valor) or valor is None:
+            return None
+
+        texto = str(valor).strip().lower()
+
+        # Se o texto está vazio ou é 'nan', retorna None
+        if not texto or texto == 'nan':
+            return None
+
+        texto = re.sub(r'(?<=\d)\s+(?=\d)', '', texto)
+        texto = re.sub(r'[r$]|\s+', '', texto)
+
+        if ',' in texto and '.' in texto:
+            if texto.rfind(',') > texto.rfind('.'):
+                texto = texto.replace('.', '').replace(',', '.')
+            else:
+                texto = texto.replace(',', '')
+        elif ',' in texto:
+            texto = texto.replace(',', '.')
+
+        preco = float(texto)
+        if preco <= 0:
+            return None
+        return preco
+    except (ValueError, TypeError):
+        return None
+
+
+# --- Classe do Diálogo de Login ---
+class LoginDialog(QtWidgets.QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Login - Precifica.ai")
+        self.setMinimumSize(600, 500)  # Janela maior
+        self.setStyleSheet("background-color: #f5f5f5; font-size: 13px;")
+
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.setContentsMargins(50, 50, 50, 50)
+        layout.setSpacing(30)
+
+        # === CORREÇÃO 1: ADICIONAR BRANDING ===
+        # Nome da aplicação - PRECIFICA.AI
+        app_name = QtWidgets.QLabel("PRECIFICA.AI")
+        app_name.setStyleSheet("""
+            font-size: 28px;
+            font-weight: bold;
+            color: #0077b6;
+            text-align: center;
+            margin-bottom: 10px;
+        """)
+        app_name.setAlignment(QtCore.Qt.AlignCenter)
+        layout.addWidget(app_name)
+
+        # Nome da empresa - VALORA RETAIL INTELLIGENCE
+        company_name = QtWidgets.QLabel("VALORA RETAIL INTELLIGENCE")
+        company_name.setStyleSheet("""
+            font-size: 16px; 
+            color: #666666;
+            text-align: center;
+            margin-bottom: 20px;
+        """)
+        company_name.setAlignment(QtCore.Qt.AlignCenter)
+        layout.addWidget(company_name)
+
+        # Campos de Login e Senha
+        form_layout = QtWidgets.QFormLayout()
+        form_layout.setSpacing(10)
+
+        self.login_input = QtWidgets.QLineEdit()
+        self.login_input.setPlaceholderText("Login")
+        self.login_input.setFixedHeight(35)
+        self.login_input.setStyleSheet(
+            "border: 1px solid #cccccc; border-radius: 5px; padding: 5px; background-color: white;")
+        form_layout.addRow(QtWidgets.QLabel("Login:"), self.login_input)
+
+        self.senha_input = QtWidgets.QLineEdit()
+        self.senha_input.setPlaceholderText("Senha")
+        self.senha_input.setEchoMode(QtWidgets.QLineEdit.Password)
+        self.senha_input.setFixedHeight(35)
+        self.senha_input.setStyleSheet(
+            "border: 1px solid #cccccc; border-radius: 5px; padding: 5px; background-color: white;")
+        form_layout.addRow(QtWidgets.QLabel("Senha:"), self.senha_input)
+
+        layout.addLayout(form_layout)
+
+        # Botão de Login
+        btn_login = QtWidgets.QPushButton("Entrar")
+        btn_login.setFixedHeight(40)
+        btn_login.setStyleSheet("""
+            QPushButton {
+                background-color: #0077b6;
+                color: white;
+                border-radius: 5px;
+                padding: 10px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #005f8c;
+            }
+        """)
+        btn_login.clicked.connect(self.handle_login)
+        layout.addWidget(btn_login)
+
+    def handle_login(self):
+        login = self.login_input.text()
+        senha = self.senha_input.text()
+
+        if login == "adm" and senha == "adm123":
+            self.accept()  # Fecha o diálogo com sucesso
+        else:
+            QtWidgets.QMessageBox.warning(self, "Erro de Login", "Login ou senha incorretos.")
+            self.senha_input.clear()
+
+
+# Resto do código com as correções aplicadas...
+# (Copiando o restante do arquivo original com as correções necessárias)
+
+# --- Classe do Diálogo de Filtros Avançados ---
+class FiltroAvancadoDialog(QtWidgets.QDialog):
+    def __init__(self, df, parent=None):
+        super().__init__(parent)
+        self.df = df
+        self.setWindowTitle("Filtros Avançados")
+        self.setMinimumWidth(400)
+        self.setStyleSheet("background-color: #FFFFFF; font-size: 13px;")
+
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.setContentsMargins(15, 15, 15, 15)
+        layout.setSpacing(10)
+
+        preco_layout = QtWidgets.QHBoxLayout()
+        self.preco_min = QtWidgets.QLineEdit()
+        self.preco_min.setPlaceholderText("Preço Mínimo (ex: 100.00)")
+        self.preco_max = QtWidgets.QLineEdit()
+        self.preco_max.setPlaceholderText("Preço Máximo (ex: 1000.00)")
+        for input_field in [self.preco_min, self.preco_max]:
+            input_field.setFixedHeight(30)
+            input_field.setStyleSheet("border: 1px solid #cccccc; border-radius: 5px; padding: 5px;")
+            validator = QtGui.QDoubleValidator()
+            validator.setBottom(0)
+            validator.setDecimals(2)
+            input_field.setValidator(validator)
+        preco_layout.addWidget(QtWidgets.QLabel("Preço:"))
+        preco_layout.addWidget(self.preco_min)
+        preco_layout.addWidget(QtWidgets.QLabel("até"))
+        preco_layout.addWidget(self.preco_max)
+        layout.addLayout(preco_layout)
+
+        self.loja_input = QtWidgets.QComboBox()
+        self.loja_input.addItem("Todas as Lojas")
+        # Verifica se a coluna 'loja' existe e não está vazia antes de adicionar itens
+        if 'loja' in self.df.columns and not self.df['loja'].dropna().empty:
+            lojas = sorted(self.df['loja'].dropna().unique())
+            self.loja_input.addItems(lojas)
+        self.loja_input.setStyleSheet("border: 1px solid #cccccc; border-radius: 5px; padding: 5px;")
+        layout.addWidget(QtWidgets.QLabel("Loja:"))
+        layout.addWidget(self.loja_input)
+
+        self.marca_input = QtWidgets.QLineEdit()
+        self.marca_input.setPlaceholderText("Marca (ex: Samsung)")
+        self.marca_input.setStyleSheet("border: 1px solid #cccccc; border-radius: 5px; padding: 5px;")
+        layout.addWidget(QtWidgets.QLabel("Marca:"))
+        layout.addWidget(self.marca_input)
+
+        self.comboCategoria = QtWidgets.QComboBox()
+        self.comboCategoria.addItems(
+            ["Todas", "Celulares", "Notebooks", "Periféricos", "Eletrônicos", "Alimentos", "Roupas", "Outros"])
+        self.comboCategoria.setStyleSheet("border: 1px solid #cccccc; border-radius: 5px; padding: 5px;")
+        layout.addWidget(QtWidgets.QLabel("Categoria:"))
+        layout.addWidget(self.comboCategoria)
+
+        self.tendencia_input = QtWidgets.QComboBox()
+        self.tendencia_input.addItems(["Todas", "Subindo 🔺", "Caindo 🔻", "Estável ⚪"])
+        self.tendencia_input.setStyleSheet("border: 1px solid #cccccc; border-radius: 5px; padding: 5px;")
+        layout.addWidget(QtWidgets.QLabel("Tendência:"))
+        layout.addWidget(self.tendencia_input)
+
+        button_layout = QtWidgets.QHBoxLayout()
+        btn_aplicar = QtWidgets.QPushButton("Aplicar Filtros")
+        btn_aplicar.setStyleSheet("""
+            QPushButton {
+                background-color: #0077b6;
+                color: white;
+                border-radius: 5px;
+                padding: 8px;
+            }
+            QPushButton:hover {
+                background-color: #005f8c;
+            }
+        """)
+        btn_aplicar.clicked.connect(self.aplicar_filtros)
+
+        btn_limpar = QtWidgets.QPushButton("Limpar Filtros")
+        btn_limpar.setStyleSheet("""
+            QPushButton {
+                background-color: #ef476f;
+                color: white;
+                border-radius: 5px;
+                padding: 8px;
+            }
+            QPushButton:hover {
+                background-color: #d43f60;
+            }
+        """)
+        btn_limpar.clicked.connect(self.limpar_filtros)
+
+        button_layout.addWidget(btn_aplicar)
+        button_layout.addWidget(btn_limpar)
+        layout.addLayout(button_layout)
+
+    def aplicar_filtros(self):
+        filtros = {
+            'preco_min': self.preco_min.text(),
+            'preco_max': self.preco_max.text(),
+            'loja': self.loja_input.currentText(),
+            'marca': self.marca_input.text(),
+            'categoria': self.comboCategoria.currentText(),
+            'tendencia': self.tendencia_input.currentText()
+        }
+        self.accept()
+        self.parent().aplicar_filtros_avancados(filtros)
+
+    def limpar_filtros(self):
+        self.preco_min.clear()
+        self.preco_max.clear()
+        self.loja_input.setCurrentIndex(0)  # Volta para "Todas as Lojas"
+        self.marca_input.clear()
+        self.comboCategoria.setCurrentIndex(0)  # Volta para "Todas"
+        self.tendencia_input.setCurrentIndex(0)  # Volta para "Todas"
+        # Restaura o DataFrame original e reaplica os filtros limpos
+        self.parent().df = self.parent().df_original.copy()
+        self.parent().tendencias = self.parent().calcular_tendencias()
+        self.parent().atualizar_tabela()
+        self.parent().atualizar_dashboard()
+        self.accept()
+
+
+# --- Classe da Nova Tela de Análise de Preços ---
+class TelaPrecificacaoInteligente(QtWidgets.QDialog):
+    def __init__(self, produto_selecionado, df_completo, parent=None):
+        super().__init__(parent)
+        self.produto_selecionado = produto_selecionado
+        self.df_completo = df_completo
+        self.parent = parent
+
+        # Configurações da janela
+        self.setWindowTitle("🎯 Análise de Preços")
+        self.setMinimumSize(700, 500)
+        self.resize(750, 550)
+
+        # Adicionar flags para maximizar/minimizar
+        self.setWindowFlags(QtCore.Qt.Window |
+                            QtCore.Qt.WindowMinimizeButtonHint |
+                            QtCore.Qt.WindowMaximizeButtonHint |
+                            QtCore.Qt.WindowCloseButtonHint)
+
+        self.setStyleSheet("""
+            QDialog {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1, 
+                    stop:0 #f8f9fa, stop:1 #e9ecef);
+                font-family: 'Segoe UI', Arial, sans-serif;
+            }
+        """)
+
+        # Criar widget principal com scroll
+        self.scroll_area = QtWidgets.QScrollArea(self)
+        self.scroll_widget = QtWidgets.QWidget()
+        self.scroll_area.setWidget(self.scroll_widget)
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
+        self.scroll_area.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
+
+        # Layout principal agora vai no scroll_widget
+        self.layout_principal = QtWidgets.QVBoxLayout(self.scroll_widget)
+        self.layout_principal.setContentsMargins(20, 20, 20, 20)
+        self.layout_principal.setSpacing(15)
+
+        # Layout da janela principal
+        main_layout = QtWidgets.QVBoxLayout(self)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.addWidget(self.scroll_area)
+
+        self.criar_cabecalho_moderno()
+        self.criar_secao_produto()
+        self.criar_dashboard_precos()
+        self.criar_sugestoes_inteligentes()
+        self.criar_botoes_acao()
+
+        # Calcular dados automaticamente
+        self.calcular_analise_mercado()
+
+    def criar_cabecalho_moderno(self):
+        """Cria um cabeçalho moderno com gradiente e ícones"""
+        cabecalho = QtWidgets.QWidget()
+        cabecalho.setFixedHeight(80)
+        cabecalho.setStyleSheet("""
+            QWidget {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #2c3e50, stop:1 #34495e);
+                border-radius: 12px;
+                margin-bottom: 10px;
+            }
+        """)
+
+        layout_cabecalho = QtWidgets.QHBoxLayout(cabecalho)
+        layout_cabecalho.setContentsMargins(25, 15, 25, 15)
+
+        # Ícone e título
+        icone_label = QtWidgets.QLabel("🎯")
+        icone_label.setStyleSheet("font-size: 32px; color: white;")
+
+        titulo_label = QtWidgets.QLabel("Análise de Preços")
+        titulo_label.setStyleSheet("""
+            color: white;
+            font-size: 20px;
+            font-weight: bold;
+            margin-left: 10px;
+        """)
+
+        # Layout do texto
+        layout_texto = QtWidgets.QVBoxLayout()
+        layout_texto.setSpacing(2)
+        layout_texto.addWidget(titulo_label)
+
+        layout_cabecalho.addWidget(icone_label)
+        layout_cabecalho.addLayout(layout_texto)
+        layout_cabecalho.addStretch()
+
+        # Badge de versão
+        badge_versao = QtWidgets.QLabel("v1.0")
+        badge_versao.setStyleSheet("""
+            background-color: rgba(255, 255, 255, 0.2);
+            color: white;
+            padding: 5px 12px;
+            border-radius: 15px;
+            font-size: 12px;
+            font-weight: bold;
+        """)
+        layout_cabecalho.addWidget(badge_versao)
+
+        self.layout_principal.addWidget(cabecalho)
+
+    def criar_secao_produto(self):
+        """Cria seção com informações do produto selecionado"""
+        secao_produto = QtWidgets.QGroupBox("📦 Produto Selecionado")
+        secao_produto.setStyleSheet("""
+            QGroupBox {
+                font-size: 16px;
+                font-weight: bold;
+                color: #2c3e50;
+                border: 2px solid #bdc3c7;
+                border-radius: 10px;
+                margin-top: 10px;
+                padding-top: 10px;
+                background-color: white;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 15px;
+                padding: 0 10px 0 10px;
+                background-color: white;
+            }
+        """)
+
+        layout_produto = QtWidgets.QVBoxLayout(secao_produto)
+        layout_produto.setContentsMargins(20, 20, 20, 20)
+
+        # Nome do produto com destaque - LAYOUT CORRIGIDO
+        nome_produto = str(self.produto_selecionado.get('produto', 'N/A'))
+        label_nome = QtWidgets.QLabel(f"<b>{nome_produto}</b>")
+        label_nome.setStyleSheet("""
+            font-size: 13px;
+            color: #2980b9;
+            padding: 12px;
+            background-color: #ecf0f1;
+            border-radius: 8px;
+            border-left: 4px solid #3498db;
+        """)
+        label_nome.setWordWrap(True)
+        label_nome.setMinimumHeight(50)
+        label_nome.setMaximumHeight(80)
+
+        # ADICIONADO: Preço atual do produto
+        preco_atual = extrair_preco(self.produto_selecionado.get('preço', 0))
+        if preco_atual:
+            label_preco_atual = QtWidgets.QLabel(f"💰 <b>Preço Atual: R$ {preco_atual:.2f}</b>")
+            label_preco_atual.setStyleSheet("""
+                font-size: 16px;
+                color: #27ae60;
+                padding: 10px;
+                background-color: #d5f4e6;
+                border-radius: 8px;
+                border-left: 4px solid #27ae60;
+                font-weight: bold;
+            """)
+            layout_produto.addWidget(label_preco_atual)
+
+        # Descrição do produto - LAYOUT CORRIGIDO
+        descricao = str(self.produto_selecionado.get('descrição do site', 'Sem descrição disponível'))
+        label_desc = QtWidgets.QLabel(f"📝 {descricao}")
+        label_desc.setStyleSheet("""
+            font-size: 11px;
+            color: #7f8c8d;
+            padding: 8px;
+            font-style: italic;
+        """)
+        label_desc.setWordWrap(True)
+        label_desc.setMinimumHeight(30)
+        label_desc.setMaximumHeight(60)
+
+        layout_produto.addWidget(label_nome)
+        layout_produto.addWidget(label_desc)
+
+        self.layout_principal.addWidget(secao_produto)
+
+    def criar_dashboard_precos(self):
+        """Cria dashboard visual com métricas de preços"""
+        dashboard = QtWidgets.QWidget()
+        layout_dashboard = QtWidgets.QHBoxLayout(dashboard)
+        layout_dashboard.setSpacing(15)
+
+        # Cards de métricas
+        self.card_menor_preco = self.criar_card_metrica("💚", "Menor Preço", "R$ 0,00", "#2c3e50")
+        self.card_maior_preco = self.criar_card_metrica("💰", "Maior Preço", "R$ 0,00", "#34495e")
+        self.card_preco_medio = self.criar_card_metrica("📊", "Preço Médio", "R$ 0,00", "#3498db")
+        self.card_produtos_similares = self.criar_card_metrica("🔍", "Similares", "0", "#7f8c8d")
+
+        layout_dashboard.addWidget(self.card_menor_preco)
+        layout_dashboard.addWidget(self.card_maior_preco)
+        layout_dashboard.addWidget(self.card_preco_medio)
+        layout_dashboard.addWidget(self.card_produtos_similares)
+
+        self.layout_principal.addWidget(dashboard)
+
+    def criar_card_metrica(self, icone, titulo, valor, cor):
+        """Cria um card visual para métricas"""
+        card = QtWidgets.QWidget()
+        card.setFixedHeight(120)
+        card.setStyleSheet(f"""
+            QWidget {{
+                background-color: white;
+                border-radius: 12px;
+                border: 1px solid #ecf0f1;
+            }}
+            QWidget:hover {{
+                border: 2px solid {cor};
+                transform: translateY(-2px);
+            }}
+        """)
+
+        layout_card = QtWidgets.QVBoxLayout(card)
+        layout_card.setContentsMargins(15, 15, 15, 15)
+        layout_card.setSpacing(5)
+
+        # Ícone
+        label_icone = QtWidgets.QLabel(icone)
+        label_icone.setStyleSheet("font-size: 24px;")
+        label_icone.setAlignment(QtCore.Qt.AlignCenter)
+
+        # Título
+        label_titulo = QtWidgets.QLabel(titulo)
+        label_titulo.setStyleSheet(f"""
+            font-size: 12px;
+            color: #7f8c8d;
+            font-weight: bold;
+            text-align: center;
+        """)
+        label_titulo.setAlignment(QtCore.Qt.AlignCenter)
+
+        # Valor
+        label_valor = QtWidgets.QLabel(valor)
+        label_valor.setStyleSheet(f"""
+            font-size: 18px;
+            color: {cor};
+            font-weight: bold;
+            text-align: center;
+        """)
+        label_valor.setAlignment(QtCore.Qt.AlignCenter)
+        label_valor.setObjectName("valor")  # Para atualizar depois
+
+        layout_card.addWidget(label_icone)
+        layout_card.addWidget(label_titulo)
+        layout_card.addWidget(label_valor)
+
+        return card
+
+    def criar_sugestoes_inteligentes(self):
+        """Cria seção de sugestões inteligentes de preços"""
+        secao_sugestoes = QtWidgets.QGroupBox("🧠 Sugestões Inteligentes de Preços")
+        secao_sugestoes.setStyleSheet("""
+            QGroupBox {
+                font-size: 16px;
+                font-weight: bold;
+                color: #2c3e50;
+                border: 2px solid #3498db;
+                border-radius: 10px;
+                margin-top: 10px;
+                padding-top: 10px;
+                background-color: white;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 15px;
+                padding: 0 10px 0 10px;
+                background-color: white;
+            }
+        """)
+
+        layout_sugestoes = QtWidgets.QVBoxLayout(secao_sugestoes)
+        layout_sugestoes.setContentsMargins(20, 20, 20, 20)
+        layout_sugestoes.setSpacing(15)
+
+        # Container para as estratégias
+        self.container_estrategias = QtWidgets.QWidget()
+        layout_estrategias = QtWidgets.QHBoxLayout(self.container_estrategias)
+        layout_estrategias.setSpacing(15)
+
+        # Estratégia Competitiva
+        self.card_competitivo = self.criar_card_estrategia(
+            "⚡", "Estratégia Competitiva",
+            "Preço agressivo para conquistar mercado",
+            "#34495e", "R$ 0,00"
+        )
+
+        # Estratégia Equilibrada
+        self.card_equilibrado = self.criar_card_estrategia(
+            "⚖️", "Estratégia Equilibrada",
+            "Preço balanceado entre margem e competitividade",
+            "#3498db", "R$ 0,00"
+        )
+
+        # Estratégia Premium
+        self.card_premium = self.criar_card_estrategia(
+            "💎", "Estratégia Premium",
+            "Preço diferenciado para maior margem",
+            "#2c3e50", "R$ 0,00"
+        )
+
+        layout_estrategias.addWidget(self.card_competitivo)
+        layout_estrategias.addWidget(self.card_equilibrado)
+        layout_estrategias.addWidget(self.card_premium)
+
+        layout_sugestoes.addWidget(self.container_estrategias)
+
+        # Seção de análise personalizada
+        self.criar_secao_analise_personalizada(layout_sugestoes)
+
+        self.layout_principal.addWidget(secao_sugestoes)
+
+    def criar_card_estrategia(self, icone, titulo, descricao, cor, preco):
+        """Cria card para estratégia de preços"""
+        card = QtWidgets.QWidget()
+        card.setFixedHeight(160)
+        card.setStyleSheet(f"""
+            QWidget {{
+                background-color: white;
+                border-radius: 12px;
+                border: 2px solid {cor};
+                padding: 5px;
+            }}
+            QWidget:hover {{
+                background-color: {cor};
+                color: white;
+            }}
+        """)
+
+        layout_card = QtWidgets.QVBoxLayout(card)
+        layout_card.setContentsMargins(15, 15, 15, 15)
+        layout_card.setSpacing(8)
+
+        # Ícone e título
+        header_layout = QtWidgets.QHBoxLayout()
+        label_icone = QtWidgets.QLabel(icone)
+        label_icone.setStyleSheet("font-size: 20px;")
+
+        label_titulo = QtWidgets.QLabel(titulo)
+        label_titulo.setStyleSheet(f"""
+            font-size: 14px;
+            font-weight: bold;
+            color: {cor};
+        """)
+
+        header_layout.addWidget(label_icone)
+        header_layout.addWidget(label_titulo)
+        header_layout.addStretch()
+
+        # Descrição
+        label_desc = QtWidgets.QLabel(descricao)
+        label_desc.setStyleSheet("""
+            font-size: 11px;
+            color: #7f8c8d;
+            line-height: 1.4;
+        """)
+        label_desc.setWordWrap(True)
+
+        # Preço sugerido
+        label_preco = QtWidgets.QLabel(preco)
+        label_preco.setStyleSheet(f"""
+            font-size: 20px;
+            font-weight: bold;
+            color: {cor};
+            text-align: center;
+            padding: 8px;
+            background-color: rgba(52, 152, 219, 0.1);
+            border-radius: 6px;
+        """)
+        label_preco.setAlignment(QtCore.Qt.AlignCenter)
+        label_preco.setObjectName("preco_sugerido")
+
+        layout_card.addLayout(header_layout)
+        layout_card.addWidget(label_desc)
+        layout_card.addStretch()
+        layout_card.addWidget(label_preco)
+
+        return card
+
+    def criar_secao_analise_personalizada(self, layout_pai):
+        """Cria seção para análise personalizada de preços"""
+        secao_personalizada = QtWidgets.QWidget()
+        secao_personalizada.setStyleSheet("""
+            QWidget {
+                background-color: #f8f9fa;
+                border-radius: 10px;
+                padding: 15px;
+                margin-top: 10px;
+            }
+        """)
+
+        layout_personalizada = QtWidgets.QVBoxLayout(secao_personalizada)
+        layout_personalizada.setSpacing(10)
+
+        # Título da seção
+        titulo_personalizada = QtWidgets.QLabel("🎯 Análise Personalizada")
+        titulo_personalizada.setStyleSheet("""
+            font-size: 16px;
+            font-weight: bold;
+            color: #2c3e50;
+            margin-bottom: 10px;
+        """)
+
+        # Input para preço personalizado
+        layout_input = QtWidgets.QHBoxLayout()
+
+        label_input = QtWidgets.QLabel("Testar preço:")
+        label_input.setStyleSheet("font-weight: bold; color: #34495e;")
+
+        self.input_preco_teste = QtWidgets.QLineEdit()
+        self.input_preco_teste.setPlaceholderText("Ex: 299.99")
+        self.input_preco_teste.setFixedWidth(120)
+        self.input_preco_teste.setStyleSheet("""
+            QLineEdit {
+                padding: 8px 12px;
+                border: 2px solid #bdc3c7;
+                border-radius: 6px;
+                font-size: 14px;
+            }
+            QLineEdit:focus {
+                border-color: #3498db;
+            }
+        """)
+
+        btn_analisar = QtWidgets.QPushButton("🔍 Analisar")
+        btn_analisar.setFixedWidth(100)
+        btn_analisar.setStyleSheet("""
+            QPushButton {
+                background-color: #3498db;
+                color: white;
+                border: none;
+                padding: 8px 15px;
+                border-radius: 6px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #2980b9;
+            }
+        """)
+        btn_analisar.clicked.connect(self.analisar_preco_personalizado)
+
+        layout_input.addWidget(label_input)
+        layout_input.addWidget(self.input_preco_teste)
+        layout_input.addWidget(btn_analisar)
+        layout_input.addStretch()
+
+        # Label para resultado da análise
+        self.label_resultado_analise = QtWidgets.QLabel("")
+        self.label_resultado_analise.setStyleSheet("""
+            font-size: 14px;
+            padding: 10px;
+            border-radius: 6px;
+            margin-top: 5px;
+        """)
+        self.label_resultado_analise.setWordWrap(True)
+
+        layout_personalizada.addWidget(titulo_personalizada)
+        layout_personalizada.addLayout(layout_input)
+        layout_personalizada.addWidget(self.label_resultado_analise)
+
+        layout_pai.addWidget(secao_personalizada)
+
+    def criar_botoes_acao(self):
+        """Cria botões de ação na parte inferior"""
+        widget_botoes = QtWidgets.QWidget()
+        layout_botoes = QtWidgets.QHBoxLayout(widget_botoes)
+        layout_botoes.setSpacing(15)
+
+        # Botão Exportar Análise
+        btn_exportar = QtWidgets.QPushButton("📊 Exportar Análise")
+        btn_exportar.setFixedHeight(45)
+        btn_exportar.setStyleSheet("""
+            QPushButton {
+                background-color: #27ae60;
+                color: white;
+                border: none;
+                padding: 12px 25px;
+                border-radius: 8px;
+                font-size: 14px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #229954;
+            }
+        """)
+        btn_exportar.clicked.connect(self.exportar_analise)
+
+        # Botão Atualizar Dados
+        btn_atualizar = QtWidgets.QPushButton("🔄 Atualizar Dados")
+        btn_atualizar.setFixedHeight(45)
+        btn_atualizar.setStyleSheet("""
+            QPushButton {
+                background-color: #f39c12;
+                color: white;
+                border: none;
+                padding: 12px 25px;
+                border-radius: 8px;
+                font-size: 14px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #e67e22;
+            }
+        """)
+        btn_atualizar.clicked.connect(self.calcular_analise_mercado)
+
+        # Botão Fechar
+        btn_fechar = QtWidgets.QPushButton("❌ Fechar")
+        btn_fechar.setFixedHeight(45)
+        btn_fechar.setStyleSheet("""
+            QPushButton {
+                background-color: #95a5a6;
+                color: white;
+                border: none;
+                padding: 12px 25px;
+                border-radius: 8px;
+                font-size: 14px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #7f8c8d;
+            }
+        """)
+        btn_fechar.clicked.connect(self.close)
+
+        layout_botoes.addStretch()
+        layout_botoes.addWidget(btn_exportar)
+        layout_botoes.addWidget(btn_atualizar)
+        layout_botoes.addWidget(btn_fechar)
+
+        self.layout_principal.addWidget(widget_botoes)
+
+    def calcular_analise_mercado(self):
+        """ANÁLISE INTELIGENTE CORRIGIDA: Busca similares reais com lógica de preços mais sensata"""
+        try:
+            nome_produto = str(self.produto_selecionado.get('produto', ''))
+            desc_produto = str(self.produto_selecionado.get('descrição do site', ''))
+            preco_atual = extrair_preco(self.produto_selecionado.get('preço', 0))
+
+            # SEMPRE mostrar que temos o preço atual
+            if not preco_atual or preco_atual <= 0:
+                preco_atual = 100  # Fallback mínimo
+
+            # 1. Buscar produtos similares REAIS com critério mais rigoroso
+            produtos_similares = self.encontrar_produtos_similares_rigoroso(nome_produto, desc_produto, preco_atual)
+
+            if not produtos_similares.empty and len(produtos_similares) >= 5:
+                # ANÁLISE COM PRODUTOS SIMILARES REAIS
+                precos_validos = produtos_similares['preço'].apply(extrair_preco).dropna()
+
+                # CORREÇÃO: Filtrar preços com faixa mais realista (80% a 120% do preço atual)
+                preco_min_aceitavel = preco_atual * 0.8  # 20% abaixo
+                preco_max_aceitavel = preco_atual * 1.2  # 20% acima
+                precos_filtrados = precos_validos[
+                    (precos_validos >= preco_min_aceitavel) &
+                    (precos_validos <= preco_max_aceitavel)
+                    ]
+
+                if len(precos_filtrados) >= 3:
+                    menor_preco = precos_filtrados.min()
+                    maior_preco = precos_filtrados.max()
+                    preco_medio = precos_filtrados.mean()
+
+                    self.atualizar_card_valor(self.card_menor_preco, f"R$ {menor_preco:.2f}")
+                    self.atualizar_card_valor(self.card_maior_preco, f"R$ {maior_preco:.2f}")
+                    self.atualizar_card_valor(self.card_preco_medio, f"R$ {preco_medio:.2f}")
+                    self.atualizar_card_valor(self.card_produtos_similares, f"{len(precos_filtrados)} similares")
+
+                    # CORREÇÃO: Estratégias baseadas no preço atual, não nos similares
+                    competitivo = max(preco_atual * 0.95, menor_preco * 0.98)  # Máximo 5% abaixo do atual
+                    equilibrado = preco_atual  # Igual ao atual
+                    premium = min(preco_atual * 1.15, maior_preco * 1.05)  # Máximo 15% acima do atual
+
+                    self.atualizar_card_preco(self.card_competitivo, competitivo)
+                    self.atualizar_card_preco(self.card_equilibrado, equilibrado)
+                    self.atualizar_card_preco(self.card_premium, premium)
+                    return
+
+            # 2. NÃO HÁ SIMILARES SUFICIENTES: Usar preço atual como base com variações menores
+            # CORREÇÃO: Variação menor e mais realista
+            variacao = 0.08  # 8% de variação (era 15%)
+
+            menor_preco = preco_atual * (1 - variacao)  # 8% abaixo
+            maior_preco = preco_atual * (1 + variacao)  # 8% acima
+            preco_medio = preco_atual
+
+            self.atualizar_card_valor(self.card_menor_preco, f"R$ {menor_preco:.2f}")
+            self.atualizar_card_valor(self.card_maior_preco, f"R$ {maior_preco:.2f}")
+            self.atualizar_card_valor(self.card_preco_medio, f"R$ {preco_medio:.2f}")
+            self.atualizar_card_valor(self.card_produtos_similares, "0 (Baseado no preço atual)")
+
+            # CORREÇÃO: Estratégias mais conservadoras baseadas no preço atual
+            competitivo = preco_atual * 0.97  # 3% abaixo do atual (era 5%)
+            equilibrado = preco_atual * 1.00  # Igual ao atual
+            premium = preco_atual * 1.08  # 8% acima do atual (era 10%)
+
+            self.atualizar_card_preco(self.card_competitivo, competitivo)
+            self.atualizar_card_preco(self.card_equilibrado, equilibrado)
+            self.atualizar_card_preco(self.card_premium, premium)
+
+        except Exception as e:
+            logging.error(f"Erro na análise: {str(e)}")
+            # Usar preço atual como fallback
+            if preco_atual and preco_atual > 0:
+                # CORREÇÃO: Fallback mais conservador
+                self.atualizar_card_valor(self.card_menor_preco, f"R$ {preco_atual * 0.95:.2f}")
+                self.atualizar_card_valor(self.card_maior_preco, f"R$ {preco_atual * 1.05:.2f}")
+                self.atualizar_card_valor(self.card_preco_medio, f"R$ {preco_atual:.2f}")
+                self.atualizar_card_valor(self.card_produtos_similares, "0")
+
+                self.atualizar_card_preco(self.card_competitivo, preco_atual * 0.97)
+                self.atualizar_card_preco(self.card_equilibrado, preco_atual)
+                self.atualizar_card_preco(self.card_premium, preco_atual * 1.08)
+
+    def encontrar_produtos_similares_rigoroso(self, nome_produto, desc_produto, preco_atual):
+        """Busca produtos similares com critério mais rigoroso"""
+        try:
+            if self.df_completo.empty:
+                return pd.DataFrame()
+
+            # Extrair palavras-chave importantes
+            texto_completo = f"{nome_produto} {desc_produto}".lower()
+            palavras_importantes = []
+
+            # Buscar marca
+            marcas = ['samsung', 'apple', 'xiaomi', 'motorola', 'lg', 'sony', 'huawei']
+            for marca in marcas:
+                if marca in texto_completo:
+                    palavras_importantes.append(marca)
+                    break
+
+            # Buscar modelo/linha
+            if 'galaxy' in texto_completo:
+                palavras_importantes.append('galaxy')
+            if 'iphone' in texto_completo:
+                palavras_importantes.append('iphone')
+
+            # Buscar especificações
+            if 'gb' in texto_completo:
+                palavras_importantes.extend(['gb', 'ram'])
+
+            if not palavras_importantes:
+                return pd.DataFrame()
+
+            def calcular_similaridade_rigorosa(row):
+                texto_row = f"{row.get('produto', '')} {row.get('descrição do site', '')}".lower()
+                score = 0
+                for palavra in palavras_importantes:
+                    if palavra in texto_row:
+                        score += 1
+
+                # Deve ter pelo menos 70% das palavras importantes
+                return score / len(palavras_importantes) if len(palavras_importantes) > 0 else 0
+
+            self.df_completo['similaridade'] = self.df_completo.apply(calcular_similaridade_rigorosa, axis=1)
+
+            # Filtrar apenas produtos com alta similaridade
+            similares = self.df_completo[self.df_completo['similaridade'] >= 0.7].copy()
+
+            return similares.sort_values('similaridade', ascending=False)
+
+        except Exception as e:
+            logging.error(f"Erro ao buscar similares: {str(e)}")
+            return pd.DataFrame()
+
+    def encontrar_produtos_similares_melhorado(self, nome_produto, desc_produto):
+        """Encontra produtos similares com algoritmo melhorado"""
+        try:
+            if self.df_completo.empty:
+                return pd.DataFrame()
+
+            nome_norm = normalizar_texto(nome_produto)
+            desc_norm = normalizar_texto(desc_produto)
+            palavras_chave = [p for p in f"{nome_norm} {desc_norm}".split() if len(p) > 2][:5]
+
+            def calcular_similaridade(row):
+                texto_row = normalizar_texto(f"{row.get('produto', '')} {row.get('descrição do site', '')}")
+                score = sum(1 for palavra in palavras_chave if palavra in texto_row)
+                return score / len(palavras_chave) if palavras_chave else 0
+
+            self.df_completo['similaridade'] = self.df_completo.apply(calcular_similaridade, axis=1)
+            similares = self.df_completo[self.df_completo['similaridade'] > 0.3].copy()
+            return similares.sort_values('similaridade', ascending=False)
+
+        except Exception:
+            return pd.DataFrame()
+
+    def detectar_categoria(self, nome, descricao):
+        """Detecta categoria do produto"""
+        texto = f"{nome} {descricao}".lower()
+        if any(palavra in texto for palavra in ['smartphone', 'celular', 'iphone']):
+            return 'celulares'
+        elif any(palavra in texto for palavra in ['notebook', 'laptop']):
+            return 'notebooks'
+        elif any(palavra in texto for palavra in ['tv', 'televisão', 'monitor']):
+            return 'eletrônicos'
+        elif any(palavra in texto for palavra in ['camisa', 'calça', 'roupa']):
+            return 'roupas'
+        return 'geral'
+
+    def obter_faixas_categoria(self, categoria):
+        """Retorna faixas de preço por categoria"""
+        faixas = {
+            'celulares': {'min': 200, 'medio': 800, 'max': 2000},
+            'notebooks': {'min': 1000, 'medio': 2500, 'max': 5000},
+            'eletrônicos': {'min': 100, 'medio': 500, 'max': 1500},
+            'roupas': {'min': 30, 'medio': 80, 'max': 200},
+            'geral': {'min': 50, 'medio': 150, 'max': 400}
+        }
+        return faixas.get(categoria, faixas['geral'])
+        """Calcula análise inteligente do mercado e atualiza interface"""
+        try:
+            nome_produto = str(self.produto_selecionado.get('produto', ''))
+            desc_produto = str(self.produto_selecionado.get('descrição do site', ''))
+
+            # Encontrar produtos similares
+            produtos_similares = self.encontrar_produtos_similares(nome_produto, desc_produto)
+
+            if produtos_similares.empty:
+                self.atualizar_interface_sem_dados()
+                return
+
+            # Extrair preços válidos
+            precos_validos = produtos_similares['preço'].apply(extrair_preco).dropna()
+
+            if precos_validos.empty:
+                self.atualizar_interface_sem_dados()
+                return
+
+            # Calcular estatísticas
+            menor_preco = precos_validos.min()
+            maior_preco = precos_validos.max()
+            preco_medio = precos_validos.mean()
+            num_similares = len(precos_validos)
+
+            # Atualizar cards de métricas
+            self.atualizar_card_valor(self.card_menor_preco, f"R$ {menor_preco:.2f}")
+            self.atualizar_card_valor(self.card_maior_preco, f"R$ {maior_preco:.2f}")
+            self.atualizar_card_valor(self.card_preco_medio, f"R$ {preco_medio:.2f}")
+            self.atualizar_card_valor(self.card_produtos_similares, str(num_similares))
+
+            # Calcular sugestões inteligentes
+            self.calcular_sugestoes_inteligentes(menor_preco, maior_preco, preco_medio)
+
+        except Exception as e:
+            logging.error(f"Erro ao calcular análise de mercado: {str(e)}")
+            self.atualizar_interface_sem_dados()
+
+    def encontrar_produtos_similares(self, nome_produto, desc_produto):
+        """Encontra produtos IDÊNTICOS usando algoritmo de precisão máxima"""
+        try:
+            if self.df_completo.empty:
+                return pd.DataFrame()
+
+            nome_norm = normalizar_texto(nome_produto)
+            desc_norm = normalizar_texto(desc_produto)
+
+            # Extrair características específicas do produto
+            caracteristicas_produto = self.extrair_caracteristicas_produto(nome_norm, desc_norm)
+
+            def eh_produto_identico(row):
+                nome_row = normalizar_texto(str(row.get('produto', '')))
+                desc_row = normalizar_texto(str(row.get('descrição do site', '')))
+
+                # 1. VERIFICAÇÃO DE IDENTIDADE RIGOROSA NO NOME
+                score_nome = self.calcular_identidade_nome(nome_norm, nome_row)
+                if score_nome < 0.8:  # 80% de identidade mínima no nome
+                    return False
+
+                # 2. VERIFICAÇÃO DE IDENTIDADE NA DESCRIÇÃO
+                if desc_norm and desc_row:
+                    score_desc = self.calcular_identidade_descricao(desc_norm, desc_row)
+                    if score_desc < 0.6:  # 60% de identidade mínima na descrição
+                        return False
+
+                # 3. VERIFICAÇÃO DE CARACTERÍSTICAS ESPECÍFICAS
+                caracteristicas_row = self.extrair_caracteristicas_produto(nome_row, desc_row)
+                if not self.caracteristicas_compativeis(caracteristicas_produto, caracteristicas_row):
+                    return False
+
+                # 4. VERIFICAÇÃO DE MARCA E MODELO
+                marca_modelo_produto = self.extrair_marca_modelo(nome_norm, desc_norm)
+                marca_modelo_row = self.extrair_marca_modelo(nome_row, desc_row)
+                if not self.marca_modelo_compativel(marca_modelo_produto, marca_modelo_row):
+                    return False
+
+                return True
+
+            # Aplicar filtro de identidade rigoroso
+            mask_identidade = self.df_completo.apply(eh_produto_identico, axis=1)
+            produtos_identicos = self.df_completo[mask_identidade].copy()
+
+            # Filtro final por faixa de preço coerente (produtos idênticos devem ter preços similares)
+            if not produtos_identicos.empty:
+                precos_identicos = produtos_identicos['preço'].apply(extrair_preco).dropna()
+
+                if not precos_identicos.empty and len(precos_identicos) > 1:
+                    # Para produtos idênticos, a variação de preço deve ser menor
+                    mediana = precos_identicos.median()
+                    desvio_padrao = precos_identicos.std()
+
+                    # Aceitar apenas preços dentro de 2 desvios padrão da mediana
+                    limite_inferior = max(0, mediana - 2 * desvio_padrao)
+                    limite_superior = mediana + 2 * desvio_padrao
+
+                    indices_validos = precos_identicos[
+                        (precos_identicos >= limite_inferior) &
+                        (precos_identicos <= limite_superior)
+                        ].index
+
+                    produtos_identicos = produtos_identicos.loc[indices_validos]
+
+            return produtos_identicos
+
+        except Exception as e:
+            logging.error(f"Erro ao encontrar produtos idênticos: {str(e)}")
+            return pd.DataFrame()
+
+    def calcular_identidade_nome(self, nome1, nome2):
+        """Calcula identidade entre nomes de produtos com precisão máxima"""
+        # Remover stopwords e normalizar
+        stopwords = {'de', 'da', 'do', 'com', 'para', 'em', 'a', 'o', 'e', 'ou', 'um', 'uma', 'os', 'as', 'na', 'no',
+                     'por', 'se', 'que'}
+
+        palavras1 = set(nome1.split()) - stopwords
+        palavras2 = set(nome2.split()) - stopwords
+
+        if not palavras1 or not palavras2:
+            return 0
+
+        # Calcular intersecção e união
+        intersecao = len(palavras1.intersection(palavras2))
+        uniao = len(palavras1.union(palavras2))
+
+        # Score de Jaccard modificado (mais rigoroso)
+        jaccard = intersecao / uniao if uniao > 0 else 0
+
+        # Bonus se as palavras principais estão presentes
+        palavras_principais1 = {p for p in palavras1 if len(p) > 3}
+        palavras_principais2 = {p for p in palavras2 if len(p) > 3}
+
+        if palavras_principais1 and palavras_principais2:
+            principais_match = len(palavras_principais1.intersection(palavras_principais2)) / len(palavras_principais1)
+            jaccard = (jaccard + principais_match) / 2
+
+        return jaccard
+
+    def calcular_identidade_descricao(self, desc1, desc2):
+        """Calcula identidade entre descrições com foco em características técnicas"""
+        # Extrair características técnicas (números, especificações)
+        import re
+
+        # Extrair números e unidades (GB, MHz, polegadas, etc.)
+        pattern_specs = r'\d+\s*(?:gb|mb|tb|mhz|ghz|pol|polegadas|mp|mah|w|watts|v|volts|a|amperes|kg|g|cm|mm|m)'
+        specs1 = set(re.findall(pattern_specs, desc1.lower()))
+        specs2 = set(re.findall(pattern_specs, desc2.lower()))
+
+        # Extrair palavras técnicas importantes
+        palavras_tecnicas = {'android', 'ios', 'windows', 'linux', 'wifi', 'bluetooth', 'usb', 'hdmi', 'led', 'oled',
+                             'amoled', 'lcd', 'full', 'hd', '4k', '8k', 'dual', 'quad', 'octa', 'core', 'ram', 'rom',
+                             'storage', 'camera', 'bateria', 'tela', 'display'}
+
+        palavras1 = set(desc1.lower().split())
+        palavras2 = set(desc2.lower().split())
+
+        tecnicas1 = palavras1.intersection(palavras_tecnicas)
+        tecnicas2 = palavras2.intersection(palavras_tecnicas)
+
+        # Score baseado em especificações técnicas
+        score_specs = 0
+        if specs1 and specs2:
+            score_specs = len(specs1.intersection(specs2)) / len(specs1.union(specs2))
+
+        # Score baseado em palavras técnicas
+        score_tecnicas = 0
+        if tecnicas1 and tecnicas2:
+            score_tecnicas = len(tecnicas1.intersection(tecnicas2)) / len(tecnicas1.union(tecnicas2))
+
+        # Score geral da descrição
+        palavras1_clean = set(desc1.split()) - {'de', 'da', 'do', 'com', 'para', 'em', 'a', 'o', 'e', 'ou'}
+        palavras2_clean = set(desc2.split()) - {'de', 'da', 'do', 'com', 'para', 'em', 'a', 'o', 'e', 'ou'}
+
+        score_geral = 0
+        if palavras1_clean and palavras2_clean:
+            score_geral = len(palavras1_clean.intersection(palavras2_clean)) / len(
+                palavras1_clean.union(palavras2_clean))
+
+        # Combinar scores (especificações têm peso maior)
+        score_final = (score_specs * 0.5) + (score_tecnicas * 0.3) + (score_geral * 0.2)
+
+        return score_final
+
+    def extrair_caracteristicas_produto(self, nome, descricao):
+        """Extrai características específicas do produto"""
+        texto_completo = f"{nome} {descricao}".lower()
+
+        caracteristicas = {
+            'marca': self.extrair_marca(texto_completo),
+            'modelo': self.extrair_modelo(texto_completo),
+            'capacidade': self.extrair_capacidade(texto_completo),
+            'cor': self.extrair_cor(texto_completo),
+            'tamanho': self.extrair_tamanho(texto_completo),
+            'tipo': self.extrair_tipo_produto(texto_completo)
+        }
+
+        return caracteristicas
+
+    def extrair_marca(self, texto):
+        """Extrai marca do produto - EXPANDIDO para todas as categorias"""
+        marcas_conhecidas = [
+            # Eletrônicos
+            'samsung', 'apple', 'iphone', 'xiaomi', 'motorola', 'lg', 'sony', 'dell', 'hp', 'lenovo', 'acer', 'asus',
+            'microsoft', 'google', 'huawei', 'nokia', 'oneplus', 'realme', 'oppo', 'vivo',
+            # Eletrodomésticos
+            'brastemp', 'consul', 'electrolux', 'ge', 'bosch', 'fischer', 'midea', 'philco', 'continental', 'mueller',
+            # Móveis e Casa
+            'tok&stok', 'casas bahia', 'magazine luiza', 'leroy merlin', 'madeira madeira', 'mobly', 'westwing',
+            # Roupas e Calçados
+            'nike', 'adidas', 'puma', 'lacoste', 'polo', 'calvin klein', 'tommy hilfiger', 'zara', 'h&m', 'renner',
+            # Livros e Mídia
+            'globo', 'abril', 'saraiva', 'record', 'companhia das letras', 'rocco',
+            # Automotivo
+            'volkswagen', 'ford', 'chevrolet', 'fiat', 'toyota', 'honda', 'hyundai', 'nissan',
+            # Cosméticos
+            'loreal', 'nivea', 'dove', 'pantene', 'garnier', 'maybelline', 'revlon', 'avon',
+            # Ferramentas
+            'bosch', 'makita', 'dewalt', 'black decker', 'stanley', 'vonder'
+        ]
+
+        for marca in marcas_conhecidas:
+            if marca in texto:
+                return marca
+        return None
+
+    def extrair_modelo(self, texto):
+        """Extrai modelo específico do produto - EXPANDIDO para todas as categorias"""
+        import re
+        # Padrões para modelos (letras + números) - EXPANDIDO
+        patterns = [
+            # Eletrônicos
+            r'galaxy\s+[a-z0-9]+',
+            r'iphone\s+[0-9]+[a-z]*',
+            r'moto\s+[a-z0-9]+',
+            r'redmi\s+[a-z0-9]+',
+            r'poco\s+[a-z0-9]+',
+            # Eletrodomésticos
+            r'brastemp\s+[a-z0-9]+',
+            r'consul\s+[a-z0-9]+',
+            r'electrolux\s+[a-z0-9]+',
+            # Automotivo
+            r'gol\s+[a-z0-9]*',
+            r'civic\s+[a-z0-9]*',
+            r'corolla\s+[a-z0-9]*',
+            # Padrão genérico para qualquer categoria
+            r'[a-z]+\s*[0-9]+[a-z]*',
+            r'modelo\s+[a-z0-9]+',
+            r'ref\s*[a-z0-9]+',
+            r'codigo\s*[a-z0-9]+',
+            r'cod\s*[a-z0-9]+'
+        ]
+
+        for pattern in patterns:
+            match = re.search(pattern, texto)
+            if match:
+                return match.group()
+        return None
+
+    def extrair_capacidade(self, texto):
+        """Extrai capacidade/especificações - EXPANDIDO para todas as categorias"""
+        import re
+        patterns = [
+            # Armazenamento (eletrônicos)
+            r'(\d+)\s*(gb|tb)',
+            # Potência (eletrodomésticos)
+            r'(\d+)\s*(w|watts)',
+            # Volume (eletrodomésticos)
+            r'(\d+)\s*(l|litros)',
+            # Peso
+            r'(\d+)\s*(kg|g|quilos)',
+            # Tamanho (roupas)
+            r'tamanho\s*([a-z0-9]+)',
+            r'tam\s*([a-z0-9]+)',
+            # Número (calçados)
+            r'numero\s*(\d+)',
+            r'num\s*(\d+)',
+            # Cilindrada (automotivo)
+            r'(\d+\.\d+)\s*(motor|cilindros)',
+            # Páginas (livros)
+            r'(\d+)\s*(paginas|pag|p)',
+            # Genérico
+            r'(\d+)\s*(unidades|un|pcs|pecas)'
+        ]
+
+        for pattern in patterns:
+            match = re.search(pattern, texto)
+            if match:
+                if len(match.groups()) == 2:
+                    return f"{match.group(1)}{match.group(2)}"
+                else:
+                    return match.group(1)
+        return None
+
+    def extrair_cor(self, texto):
+        """Extrai cor do produto"""
+        cores = ['preto', 'branco', 'azul', 'vermelho', 'verde', 'amarelo', 'rosa', 'roxo', 'cinza', 'dourado', 'prata',
+                 'black', 'white', 'blue', 'red', 'green', 'yellow', 'pink', 'purple', 'gray', 'gold', 'silver']
+
+        for cor in cores:
+            if cor in texto:
+                return cor
+        return None
+
+    def extrair_tamanho(self, texto):
+        """Extrai tamanho/dimensões"""
+        import re
+        patterns = [
+            r'(\d+(?:\.\d+)?)\s*pol',
+            r'(\d+(?:\.\d+)?)\s*polegadas',
+            r'(\d+(?:\.\d+)?)"',
+            r'(\d+(?:\.\d+)?)\s*inch'
+        ]
+
+        for pattern in patterns:
+            match = re.search(pattern, texto)
+            if match:
+                return match.group(1)
+        return None
+
+    def extrair_tipo_produto(self, texto):
+        """Extrai tipo específico do produto - EXPANDIDO para TODAS as categorias"""
+        tipos = {
+            # Eletrônicos
+            'smartphone': ['smartphone', 'celular', 'telefone'],
+            'notebook': ['notebook', 'laptop'],
+            'tablet': ['tablet', 'ipad'],
+            'smartwatch': ['smartwatch', 'relogio', 'relógio'],
+            'fone': ['fone', 'headphone', 'earphone', 'airpods'],
+            'tv': ['tv', 'televisao', 'televisão', 'smart tv'],
+            'monitor': ['monitor', 'display'],
+            'camera': ['camera', 'câmera', 'filmadora'],
+            'console': ['playstation', 'xbox', 'nintendo', 'console'],
+
+            # Eletrodomésticos
+            'geladeira': ['geladeira', 'refrigerador', 'frigobar'],
+            'fogao': ['fogao', 'fogão', 'cooktop'],
+            'microondas': ['microondas', 'micro-ondas'],
+            'lavadora': ['lavadora', 'maquina de lavar', 'tanquinho'],
+            'secadora': ['secadora', 'centrifuga'],
+            'aspirador': ['aspirador', 'aspirador de po'],
+            'liquidificador': ['liquidificador', 'mixer'],
+            'cafeteira': ['cafeteira', 'maquina de cafe'],
+
+            # Móveis e Casa
+            'sofa': ['sofa', 'sofá', 'poltrona'],
+            'mesa': ['mesa', 'escrivaninha'],
+            'cadeira': ['cadeira', 'banco', 'poltrona'],
+            'cama': ['cama', 'beliche', 'bicama'],
+            'guarda_roupa': ['guarda-roupa', 'roupeiro', 'armario'],
+            'estante': ['estante', 'prateleira', 'rack'],
+            'colchao': ['colchao', 'colchão'],
+
+            # Roupas e Calçados
+            'camisa': ['camisa', 'blusa', 'camiseta'],
+            'calca': ['calca', 'calça', 'jeans'],
+            'vestido': ['vestido', 'saia'],
+            'sapato': ['sapato', 'tenis', 'tênis', 'sandalia'],
+            'bolsa': ['bolsa', 'mochila', 'carteira'],
+            'relogio_acessorio': ['relogio', 'relógio', 'pulseira'],
+
+            # Livros e Mídia
+            'livro': ['livro', 'revista', 'manual', 'guia'],
+            'cd': ['cd', 'dvd', 'blu-ray'],
+            'jogo': ['jogo', 'game'],
+
+            # Automotivo
+            'pneu': ['pneu', 'roda'],
+            'oleo': ['oleo', 'óleo', 'lubrificante'],
+            'bateria': ['bateria', 'bateria automotiva'],
+            'filtro': ['filtro', 'filtro de ar', 'filtro de oleo'],
+
+            # Cosméticos e Higiene
+            'perfume': ['perfume', 'colonia', 'desodorante'],
+            'shampoo': ['shampoo', 'condicionador'],
+            'creme': ['creme', 'hidratante', 'loção'],
+            'maquiagem': ['maquiagem', 'batom', 'base', 'rimel'],
+
+            # Ferramentas
+            'furadeira': ['furadeira', 'parafusadeira'],
+            'martelo': ['martelo', 'alicate', 'chave'],
+            'serra': ['serra', 'serrote'],
+
+            # Esportes
+            'bicicleta': ['bicicleta', 'bike'],
+            'bola': ['bola', 'futebol', 'volei'],
+            'equipamento': ['equipamento', 'acessorio esportivo'],
+
+            # Bebidas e Alimentos
+            'vinho': ['vinho', 'champagne', 'espumante'],
+            'cerveja': ['cerveja', 'chopp'],
+            'cafe': ['cafe', 'café'],
+            'chocolate': ['chocolate', 'doce'],
+
+            # Brinquedos
+            'boneca': ['boneca', 'boneco'],
+            'carrinho': ['carrinho', 'brinquedo'],
+            'lego': ['lego', 'blocos'],
+
+            # Genérico
+            'produto': ['produto', 'item', 'artigo']
+        }
+
+        for tipo, palavras in tipos.items():
+            if any(palavra in texto for palavra in palavras):
+                return tipo
+        return 'produto'  # Tipo genérico se não identificar
+
+    def caracteristicas_compativeis(self, carac1, carac2):
+        """Verifica se as características são compatíveis (produto idêntico)"""
+        # Características que devem ser idênticas
+        criticas = ['marca', 'modelo', 'capacidade', 'tipo']
+
+        for caracteristica in criticas:
+            val1 = carac1.get(caracteristica)
+            val2 = carac2.get(caracteristica)
+
+            # Se ambos têm a característica, devem ser iguais
+            if val1 and val2 and val1 != val2:
+                return False
+
+        return True
+
+    def extrair_marca_modelo(self, nome, descricao):
+        """Extrai marca e modelo combinados"""
+        texto = f"{nome} {descricao}".lower()
+        marca = self.extrair_marca(texto)
+        modelo = self.extrair_modelo(texto)
+
+        return {'marca': marca, 'modelo': modelo}
+
+    def marca_modelo_compativel(self, mm1, mm2):
+        """Verifica compatibilidade de marca e modelo"""
+        # Marca deve ser idêntica
+        if mm1['marca'] and mm2['marca']:
+            if mm1['marca'] != mm2['marca']:
+                return False
+
+        # Modelo deve ser idêntico (se ambos têm)
+        if mm1['modelo'] and mm2['modelo']:
+            if mm1['modelo'] != mm2['modelo']:
+                return False
+
+        return True
+
+    def calcular_sugestoes_inteligentes(self, menor_preco, maior_preco, preco_medio):
+        """Calcula sugestões inteligentes de preços baseadas no mercado"""
+        try:
+            # Estratégia Competitiva (5-10% abaixo do menor preço)
+            preco_competitivo = menor_preco * 0.92  # 8% abaixo do menor
+
+            # Estratégia Equilibrada (próximo à média, mas competitivo)
+            preco_equilibrado = (preco_medio + menor_preco) / 2
+
+            # Estratégia Premium (entre média e máximo, mas não excessivo)
+            preco_premium = min(preco_medio * 1.15, maior_preco * 0.9)
+
+            # Atualizar cards de estratégias
+            self.atualizar_card_preco(self.card_competitivo, preco_competitivo)
+            self.atualizar_card_preco(self.card_equilibrado, preco_equilibrado)
+            self.atualizar_card_preco(self.card_premium, preco_premium)
+
+        except Exception as e:
+            logging.error(f"Erro ao calcular sugestões: {str(e)}")
+
+    def atualizar_card_valor(self, card, novo_valor):
+        """Atualiza o valor em um card de métrica"""
+        try:
+            label_valor = card.findChild(QtWidgets.QLabel, "valor")
+            if label_valor:
+                label_valor.setText(novo_valor)
+        except Exception as e:
+            logging.error(f"Erro ao atualizar card: {str(e)}")
+
+    def atualizar_card_preco(self, card, preco):
+        """Atualiza o preço em um card de estratégia"""
+        try:
+            label_preco = card.findChild(QtWidgets.QLabel, "preco_sugerido")
+            if label_preco:
+                label_preco.setText(f"R$ {preco:.2f}")
+        except Exception as e:
+            logging.error(f"Erro ao atualizar preço: {str(e)}")
+
+    def atualizar_interface_sem_dados(self):
+        """Atualiza interface quando não há produtos idênticos suficientes"""
+        self.atualizar_card_valor(self.card_menor_preco, "N/A")
+        self.atualizar_card_valor(self.card_maior_preco, "N/A")
+        self.atualizar_card_valor(self.card_preco_medio, "N/A")
+        self.atualizar_card_valor(self.card_produtos_similares, "0")
+
+        self.atualizar_card_preco(self.card_competitivo, 0)
+        self.atualizar_card_preco(self.card_equilibrado, 0)
+        self.atualizar_card_preco(self.card_premium, 0)
+
+        # Atualizar análise personalizada com mensagem específica
+        self.label_resultado_analise.setText(
+            "⚠️ Produto único - Não foram encontrados produtos idênticos para comparação precisa.")
+        self.label_resultado_analise.setStyleSheet("""
+            background-color: #fff3cd; 
+            color: #856404; 
+            border: 1px solid #ffeaa7;
+            padding: 15px;
+            border-radius: 8px;
+            font-weight: bold;
+        """)
+
+    def analisar_preco_personalizado(self):
+        """Analisa um preço informado pelo usuário"""
+        try:
+            preco_texto = self.input_preco_teste.text().strip()
+            if not preco_texto:
+                self.label_resultado_analise.setText("⚠️ Por favor, informe um preço para análise.")
+                self.label_resultado_analise.setStyleSheet(
+                    "background-color: #fff3cd; color: #856404; border: 1px solid #ffeaa7;")
+                return
+
+            preco_teste = extrair_preco(preco_texto)
+            if preco_teste is None:
+                self.label_resultado_analise.setText("❌ Preço inválido. Use o formato: 299.99")
+                self.label_resultado_analise.setStyleSheet(
+                    "background-color: #f8d7da; color: #721c24; border: 1px solid #f5c6cb;")
+                return
+
+            # Obter dados atuais dos cards
+            menor_texto = self.card_menor_preco.findChild(QtWidgets.QLabel, "valor").text()
+            maior_texto = self.card_maior_preco.findChild(QtWidgets.QLabel, "valor").text()
+
+            if menor_texto == "N/A" or maior_texto == "N/A":
+                self.label_resultado_analise.setText("⚠️ Não há dados suficientes para análise comparativa.")
+                self.label_resultado_analise.setStyleSheet(
+                    "background-color: #fff3cd; color: #856404; border: 1px solid #ffeaa7;")
+                return
+
+            menor_preco = extrair_preco(menor_texto.replace("R$ ", ""))
+            maior_preco = extrair_preco(maior_texto.replace("R$ ", ""))
+
+            # Análise do posicionamento
+            if preco_teste <= menor_preco:
+                resultado = f"🏆 EXCELENTE! Seu preço de R$ {preco_teste:.2f} está abaixo do menor preço do mercado (R$ {menor_preco:.2f}). Você será muito competitivo!"
+                cor_fundo = "#d4edda"
+                cor_texto = "#155724"
+                cor_borda = "#c3e6cb"
+            elif preco_teste <= menor_preco * 1.1:
+                resultado = f"✅ MUITO BOM! Seu preço de R$ {preco_teste:.2f} está muito próximo do menor preço (R$ {menor_preco:.2f}). Ótima estratégia competitiva!"
+                cor_fundo = "#d1ecf1"
+                cor_texto = "#0c5460"
+                cor_borda = "#bee5eb"
+            elif preco_teste <= (menor_preco + maior_preco) / 2:
+                resultado = f"👍 BOM! Seu preço de R$ {preco_teste:.2f} está na faixa competitiva do mercado. Você terá boas chances de venda."
+                cor_fundo = "#fff3cd"
+                cor_texto = "#856404"
+                cor_borda = "#ffeaa7"
+            else:
+                resultado = f"⚠️ ATENÇÃO! Seu preço de R$ {preco_teste:.2f} está acima da média do mercado. Considere reduzir para ser mais competitivo."
+                cor_fundo = "#f8d7da"
+                cor_texto = "#721c24"
+                cor_borda = "#f5c6cb"
+
+            self.label_resultado_analise.setText(resultado)
+            self.label_resultado_analise.setStyleSheet(
+                f"background-color: {cor_fundo}; color: {cor_texto}; border: 1px solid {cor_borda};")
+
+        except Exception as e:
+            logging.error(f"Erro na análise personalizada: {str(e)}")
+            self.label_resultado_analise.setText("❌ Erro ao analisar preço. Tente novamente.")
+            self.label_resultado_analise.setStyleSheet(
+                "background-color: #f8d7da; color: #721c24; border: 1px solid #f5c6cb;")
+
+    def exportar_analise(self):
+        """Exporta a análise atual para arquivo"""
+        try:
+            nome_produto = str(self.produto_selecionado.get('produto', 'Produto'))
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            nome_arquivo = f"analise_precos_{nome_produto.replace(' ', '_')}_{timestamp}.txt"
+
+            # Obter dados dos cards
+            menor_preco = self.card_menor_preco.findChild(QtWidgets.QLabel, "valor").text()
+            maior_preco = self.card_maior_preco.findChild(QtWidgets.QLabel, "valor").text()
+            preco_medio = self.card_preco_medio.findChild(QtWidgets.QLabel, "valor").text()
+            num_similares = self.card_produtos_similares.findChild(QtWidgets.QLabel, "valor").text()
+
+            preco_competitivo = self.card_competitivo.findChild(QtWidgets.QLabel, "preco_sugerido").text()
+            preco_equilibrado = self.card_equilibrado.findChild(QtWidgets.QLabel, "preco_sugerido").text()
+            preco_premium = self.card_premium.findChild(QtWidgets.QLabel, "preco_sugerido").text()
+
+            conteudo = f"""
+RELATÓRIO DE ANÁLISE DE PREÇOS - VALORA AI
+==========================================
+
+Produto: {nome_produto}
+Data/Hora: {datetime.now().strftime("%d/%m/%Y às %H:%M:%S")}
+
+DADOS DO MERCADO:
+- Menor Preço: {menor_preco}
+- Maior Preço: {maior_preco}
+- Preço Médio: {preco_medio}
+- Produtos Similares: {num_similares}
+
+SUGESTÕES INTELIGENTES:
+- Estratégia Competitiva: {preco_competitivo}
+- Estratégia Equilibrada: {preco_equilibrado}
+- Estratégia Premium: {preco_premium}
+
+RECOMENDAÇÕES:
+- Para entrada rápida no mercado: Use a estratégia competitiva
+- Para equilíbrio entre margem e volume: Use a estratégia equilibrada
+- Para maximizar margem: Use a estratégia premium
+
+Gerado por Valora AI - Precificação Inteligente v1.0
+            """
+
+            caminho, _ = QtWidgets.QFileDialog.getSaveFileName(
+                self, "Salvar Análise", nome_arquivo, "Arquivos de Texto (*.txt)"
+            )
+
+            if caminho:
+                with open(caminho, 'w', encoding='utf-8') as arquivo:
+                    arquivo.write(conteudo)
+
+                QtWidgets.QMessageBox.information(
+                    self, "Sucesso",
+                    f"Análise exportada com sucesso!\n\nArquivo: {caminho}"
+                )
+
+        except Exception as e:
+            logging.error(f"Erro ao exportar análise: {str(e)}")
+            QtWidgets.QMessageBox.critical(
+                self, "Erro",
+                f"Erro ao exportar análise:\n{str(e)}"
+            )
+
+
+class VisualizadorProdutos(QtWidgets.QWidget):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("PRECIFICA.AI - VALORA RETAIL INTELLIGENCE")
+        self.setGeometry(100, 100, 1200, 700)
+        self.setStyleSheet("background-color: #f5f5f5;")
+        self.df = pd.DataFrame()  # Inicializa vazio
+        self.df_original = pd.DataFrame()  # Inicializa vazio
+        self.tendencias = {}
+        self.mensagem_inicial = None  # Atributo para armazenar a mensagem inicial
+        self.layout = QtWidgets.QVBoxLayout(self)
+        self.layout.setContentsMargins(10, 10, 10, 10)
+        self.layout.setSpacing(10)
+        self.criar_cabecalho()
+        self.dashboard_widget = self.criar_dashboard()  # Cria e armazena o widget do dashboard
+        self.criar_botoes_e_busca()
+        self.criar_tabela()
+        self.mostrar_mensagem_inicial()  # Mostra a mensagem inicial
+
+    def criar_cabecalho(self):
+        header = QtWidgets.QWidget()
+        header.setStyleSheet("background-color: #003366; padding: 10px;")
+        header_layout = QtWidgets.QHBoxLayout(header)
+        header_layout.setContentsMargins(15, 5, 15, 5)
+        header_layout.setSpacing(10)
+
+        logo_label = QtWidgets.QLabel("PRECIFICA.AI")
+        logo_label.setStyleSheet("color: white; font-size: 20px; font-weight: bold; font-family: Arial;")
+        header_layout.addWidget(logo_label)
+
+        data_atual = datetime.now()
+        try:
+            # Tenta formatar com locale pt_BR
+            dia_semana = data_atual.strftime("%A").capitalize()
+            mes = data_atual.strftime("%B").capitalize()
+        except ValueError:
+            # Fallback para formato padrão se locale falhar
+            dia_semana = data_atual.strftime("%A")
+            mes = data_atual.strftime("%B")
+
+        dia = data_atual.strftime("%d")
+        ano = data_atual.strftime("%Y")
+        horario = data_atual.strftime("%H:%M")  # Usa H:M para hora:minuto
+        data_formatada = f"{horario} -03, {dia_semana}, {dia} de {mes} de {ano}"
+        titulo_data = QtWidgets.QLabel(f"Visualizador de Produtos - {data_formatada}")
+        titulo_data.setStyleSheet("color: white; font-size: 16px; font-weight: bold;")
+        titulo_data.setAlignment(QtCore.Qt.AlignCenter)
+        header_layout.addStretch()
+        header_layout.addWidget(titulo_data)
+        header_layout.addStretch()
+
+        menu_button = QtWidgets.QPushButton("☰")
+        menu_button.setFixedSize(40, 40)
+        menu_button.setStyleSheet("""
+            QPushButton {
+                background-color: #0077b6;
+                color: white;
+                border-radius: 5px;
+                font-size: 18px;
+            }
+            QPushButton:hover {
+                background-color: #005f8c;
+            }
+        """)
+        menu_button.clicked.connect(self.mostrar_menu)
+        header_layout.addWidget(menu_button)
+
+        self.layout.addWidget(header)
+
+    def mostrar_menu(self):
+        try:
+            menu = QtWidgets.QMenu(self)
+            menu.setStyleSheet("""
+                QMenu {
+                    background-color: #FFFFFF;
+                    border: 1px solid #cccccc;
+                    font-size: 13px;
+                }
+                QMenu::item {
+                    padding: 8px 20px;
+                    color: #333333;
+                }
+                QMenu::item:selected {
+                    background-color: #0077b6;
+                    color: white;
+                }
+            """)
+            menu.addAction("Sobre", lambda: QtWidgets.QMessageBox.information(self, "Sobre",
+                                                                              "Versão 1.0 Precifica.ai\n\nSistema de análise de preços\nValora Retail Intelligence"))
+            menu.addAction("Contato", lambda: QtWidgets.QMessageBox.information(self, "Contato",
+                                                                                "Entre em contato conosco:\ncontato@valoraretail.com.br"))
+            menu.addAction("Configurações", self.mostrar_configuracoes)
+            menu.exec_(QtGui.QCursor.pos())
+        except Exception as e:
+            logging.error(f"Erro ao mostrar menu: {str(e)}")
+            QtWidgets.QMessageBox.critical(self, "Erro", f"Erro ao mostrar menu: {str(e)}")
+
+    def mostrar_configuracoes(self):
+        try:
+            dialog = QtWidgets.QDialog(self)
+            dialog.setWindowTitle("Configurações")
+            dialog.setMinimumSize(300, 200)
+            dialog.setStyleSheet("background-color: #FFFFFF;")
+
+            layout = QtWidgets.QVBoxLayout(dialog)
+            layout.setContentsMargins(20, 20, 20, 20)
+            layout.setSpacing(15)
+
+            # Título
+            titulo = QtWidgets.QLabel("Configurações do Sistema")
+            titulo.setStyleSheet("font-size: 16px; font-weight: bold; color: #003366;")
+            titulo.setAlignment(QtCore.Qt.AlignCenter)
+            layout.addWidget(titulo)
+
+            # Opção de tema
+            tema_layout = QtWidgets.QHBoxLayout()
+            tema_label = QtWidgets.QLabel("Tema:")
+            tema_label.setStyleSheet("font-weight: bold;")
+
+            self.tema_combo = QtWidgets.QComboBox()
+            self.tema_combo.addItems(["Modo Claro", "Modo Escuro"])
+            self.tema_combo.setCurrentText(getattr(self, 'tema_atual', 'Modo Claro'))
+            self.tema_combo.setStyleSheet("padding: 5px; border: 1px solid #cccccc; border-radius: 3px;")
+
+            tema_layout.addWidget(tema_label)
+            tema_layout.addWidget(self.tema_combo)
+            layout.addLayout(tema_layout)
+
+            # Botões
+            button_layout = QtWidgets.QHBoxLayout()
+
+            btn_aplicar = QtWidgets.QPushButton("Aplicar")
+            btn_aplicar.setStyleSheet("""
+                QPushButton {
+                    background-color: #0077b6;
+                    color: white;
+                    border-radius: 5px;
+                    padding: 8px 15px;
+                    font-weight: bold;
+                }
+                QPushButton:hover {
+                    background-color: #005f8c;
+                }
+            """)
+            btn_aplicar.clicked.connect(lambda: self.aplicar_tema(dialog))
+
+            btn_cancelar = QtWidgets.QPushButton("Cancelar")
+            btn_cancelar.setStyleSheet("""
+                QPushButton {
+                    background-color: #cccccc;
+                    color: #333333;
+                    border-radius: 5px;
+                    padding: 8px 15px;
+                }
+                QPushButton:hover {
+                    background-color: #bbbbbb;
+                }
+            """)
+            btn_cancelar.clicked.connect(dialog.reject)
+
+            button_layout.addWidget(btn_aplicar)
+            button_layout.addWidget(btn_cancelar)
+            layout.addLayout(button_layout)
+
+            dialog.exec_()
+
+        except Exception as e:
+            logging.error(f"Erro ao mostrar configurações: {str(e)}")
+            QtWidgets.QMessageBox.critical(self, "Erro", f"Erro ao mostrar configurações: {str(e)}")
+
+    def aplicar_tema(self, dialog):
+        try:
+            tema_selecionado = self.tema_combo.currentText()
+            self.tema_atual = tema_selecionado
+
+            if tema_selecionado == "Modo Escuro":
+                # Aplica tema escuro
+                self.setStyleSheet("background-color: #2b2b2b; color: #ffffff;")
+
+                # Atualiza cabeçalho
+                header = self.layout.itemAt(0).widget()
+                if header:
+                    header.setStyleSheet("background-color: #1a1a1a; padding: 10px;")
+
+                # Atualiza dashboard
+                if hasattr(self, 'dashboard_widget'):
+                    self.dashboard_widget.setStyleSheet(
+                        "background-color: #3c3c3c; border: 1px solid #555555; border-radius: 5px; padding: 10px; color: #ffffff;")
+
+                # Atualiza tabela
+                if hasattr(self, 'tabela'):
+                    self.tabela.setStyleSheet("""
+                        QTableWidget {
+                            background-color: #3c3c3c;
+                            border: none;
+                            gridline-color: #555555;
+                            font-size: 12px;
+                            alternate-background-color: #4a4a4a;
+                            color: #ffffff;
+                        }
+                        QTableWidget::item {
+                            padding: 2px 5px;
+                        }
+                        QTableWidget::item:selected {
+                            background-color: #0077b6;
+                            color: white;
+                        }
+                    """)
+
+            else:
+                # Aplica tema claro (padrão)
+                self.setStyleSheet("background-color: #f5f5f5;")
+
+                # Restaura cabeçalho
+                header = self.layout.itemAt(0).widget()
+                if header:
+                    header.setStyleSheet("background-color: #003366; padding: 10px;")
+
+                # Restaura dashboard
+                if hasattr(self, 'dashboard_widget'):
+                    self.dashboard_widget.setStyleSheet(
+                        "background-color: #FFFFFF; border: 1px solid #cccccc; border-radius: 5px; padding: 10px;")
+
+                # Restaura tabela
+                if hasattr(self, 'tabela'):
+                    self.tabela.setStyleSheet("""
+                        QTableWidget {
+                            background-color: white;
+                            border: none;
+                            gridline-color: #dcdcdc;
+                            font-size: 12px;
+                            alternate-background-color: #f5f5f5;
+                        }
+                        QTableWidget::item {
+                            padding: 2px 5px;
+                        }
+                        QTableWidget::item:selected {
+                            background-color: #0077b6;
+                            color: white;
+                        }
+                    """)
+
+            QtWidgets.QMessageBox.information(self, "Configurações", f"Tema alterado para: {tema_selecionado}")
+            dialog.accept()
+
+        except Exception as e:
+            logging.error(f"Erro ao aplicar tema: {str(e)}")
+            QtWidgets.QMessageBox.critical(self, "Erro", f"Erro ao aplicar tema: {str(e)}")
+
+    def criar_dashboard(self):
+        dashboard = QtWidgets.QWidget()
+        dashboard.setStyleSheet(
+            "background-color: #FFFFFF; border: 1px solid #cccccc; border-radius: 5px; padding: 10px;")
+        dashboard_layout = QtWidgets.QHBoxLayout(dashboard)
+        dashboard_layout.setSpacing(20)
+
+        self.total_label = QtWidgets.QLabel(f"🏷️ Total de Produtos: 0")  # Inicializa com 0
+        self.total_label.setStyleSheet("font-size: 14px; color: #333333;")
+        dashboard_layout.addWidget(self.total_label)
+
+        self.sparkline_canvas = self.criar_sparkline()  # Cria o canvas inicial
+        dashboard_layout.addWidget(self.sparkline_canvas)
+
+        self.layout.addWidget(dashboard)
+        return dashboard  # Retorna o widget criado
+
+    def criar_sparkline(self):
+        try:
+            fig, ax = plt.subplots(figsize=(2, 0.5))
+            ax.set_axis_off()
+            if not self.df.empty and 'preço' in self.df.columns:
+                precos = self.df['preço'].apply(extrair_preco).dropna()
+                if not precos.empty:
+                    ax.plot(precos, color='#0077b6', linewidth=1)
+            canvas = FigureCanvas(fig)
+            plt.close(fig)  # Fecha a figura para liberar memória
+            return canvas
+        except Exception as e:
+            logging.error(f"Erro ao criar sparkline: {str(e)}")
+            fig, ax = plt.subplots(figsize=(2, 0.5))
+            ax.set_axis_off()
+            canvas = FigureCanvas(fig)
+            plt.close(fig)
+            return canvas
+
+    def criar_botoes_e_busca(self):
+        barra = QtWidgets.QWidget()
+        barra_layout = QtWidgets.QHBoxLayout(barra)
+        barra_layout.setContentsMargins(10, 10, 10, 10)
+        barra_layout.setSpacing(10)
+
+        ferramentas = QtWidgets.QWidget()
+        ferramentas_layout = QtWidgets.QHBoxLayout(ferramentas)
+        ferramentas_layout.setSpacing(5)
+
+        btn_csv = QtWidgets.QPushButton("📂 Importar CSV")
+        btn_csv.clicked.connect(self.abrir_csv)
+        btn_xlsx = QtWidgets.QPushButton("📂 Importar XLSX")
+        btn_xlsx.clicked.connect(self.abrir_xlsx)
+        btn_analise = QtWidgets.QPushButton("📊 Analisar Preços")
+        btn_analise.clicked.connect(self.mostrar_analise_precos_detalhada)
+        btn_exportar = QtWidgets.QPushButton("📤 Exportar Dados")
+        btn_exportar.clicked.connect(self.exportar_dados)
+
+        for btn in [btn_csv, btn_xlsx, btn_analise, btn_exportar]:
+            btn.setFixedHeight(35)
+            btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #FFFFFF;
+                    border: 1px solid #cccccc;
+                    border-radius: 6px;
+                    padding: 8px 12px;
+                    color: #333333;
+                    font-size: 13px;
+                }
+                QPushButton:hover {
+                    background-color: #e6e6e6;
+                }
+            """)
+            ferramentas_layout.addWidget(btn)
+
+        barra_layout.addWidget(ferramentas)
+
+        busca_layout = QtWidgets.QHBoxLayout()
+        self.busca = QtWidgets.QLineEdit()
+        self.busca.setPlaceholderText("🔍 Busque por nome, categoria, loja ou código...")
+        self.busca.setFixedHeight(35)
+        self.busca.setStyleSheet("""
+            QLineEdit {
+                background-color: white;
+                border: 1px solid #cccccc;
+                border-radius: 6px;
+                padding: 4px 10px;
+                font-size: 13px;
+            }
+        """)
+        self.busca.textChanged.connect(self.filtrar_tabela)
+
+        btn_filtros = QtWidgets.QPushButton("🔽 Filtros")
+        btn_filtros.setFixedHeight(35)
+        btn_filtros.clicked.connect(self.abrir_filtros_avancados)
+        btn_filtros.setStyleSheet("""
+            QPushButton {
+                background-color: #0077b6;
+                color: white;
+                border-radius: 6px;
+                padding: 8px 12px;
+                font-size: 13px;
+            }
+            QPushButton:hover {
+                background-color: #005f8c;
+            }
+        """)
+
+        busca_layout.addWidget(self.busca)
+        busca_layout.addWidget(btn_filtros)
+        barra_layout.addStretch()
+        barra_layout.addLayout(busca_layout)
+        self.layout.addWidget(barra)
+
+    def criar_tabela(self):
+        self.tabela = QtWidgets.QTableWidget()
+        self.tabela.setColumnCount(6)
+        self.tabela.setHorizontalHeaderLabels(["PRODUTO", "DESCRIÇÃO DO SITE", "PREÇO", "SITE", "LOJA", "TENDÊNCIA"])
+        header = self.tabela.horizontalHeader()
+        header.setSectionResizeMode(0, QtWidgets.QHeaderView.Fixed)
+        header.resizeSection(0, 150)
+        header.setSectionResizeMode(1, QtWidgets.QHeaderView.Stretch)
+        header.setSectionResizeMode(2, QtWidgets.QHeaderView.Fixed)
+        header.resizeSection(2, 120)
+        header.setSectionResizeMode(3, QtWidgets.QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(4, QtWidgets.QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(5, QtWidgets.QHeaderView.Fixed)
+        header.resizeSection(5, 80)
+        header.setStyleSheet("""
+            QHeaderView::section {
+                background-color: #003366;
+                color: white;
+                padding: 5px;
+                border: none;
+                font-weight: bold;
+            }
+        """)
+        self.tabela.setStyleSheet("""
+            QTableWidget {
+                background-color: white;
+                border: none;
+                gridline-color: #dcdcdc;
+                font-size: 12px;
+                alternate-background-color: #f5f5f5;
+            }
+            QTableWidget::item {
+                padding: 2px 5px;
+            }
+            QTableWidget::item:selected {
+                background-color: #0077b6;
+                color: white;
+            }
+        """)
+        self.tabela.setAlternatingRowColors(True)
+        self.tabela.setShowGrid(True)
+        self.tabela.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
+        self.tabela.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
+        self.tabela.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
+        self.tabela.setWordWrap(True)
+        self.tabela.setColumnHidden(0, False)
+        self.tabela.setHorizontalScrollMode(QtWidgets.QAbstractItemView.ScrollPerPixel)
+        self.tabela.setVerticalScrollMode(QtWidgets.QAbstractItemView.ScrollPerPixel)
+        self.layout.addWidget(self.tabela)
+
+    def abrir_csv(self):
+        try:
+            caminho, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Abrir CSV", "", "CSV Files (*.csv)")
+            if caminho:
+                try:
+                    df = pd.read_csv(caminho, encoding='utf-8')
+                except UnicodeDecodeError:
+                    df = pd.read_csv(caminho, encoding='latin-1')
+                self.carregar_dados(df)
+        except Exception as e:
+            logging.error(f"Erro ao abrir CSV: {str(e)}")
+            QtWidgets.QMessageBox.critical(self, "Erro ao Ler Arquivo", f"Não foi possível ler o arquivo CSV:\n{e}")
+
+    def abrir_xlsx(self):
+        try:
+            caminho, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Abrir XLSX", "", "Excel Files (*.xlsx *.xls)")
+            if caminho:
+                df = pd.read_excel(caminho)
+                self.carregar_dados(df)
+        except Exception as e:
+            logging.error(f"Erro ao abrir XLSX: {str(e)}")
+            QtWidgets.QMessageBox.critical(self, "Erro ao Ler Arquivo", f"Não foi possível ler o arquivo Excel:\n{e}")
+
+    def exportar_dados(self):
+        try:
+            if self.df.empty:
+                QtWidgets.QMessageBox.warning(self, "Atenção", "Nenhum dado para exportar.")
+                return
+            caminho, _ = QtWidgets.QFileDialog.getSaveFileName(self, "Salvar CSV", "", "CSV Files (*.csv)")
+            if caminho:
+                self.df.to_csv(caminho, index=False, encoding='utf-8')
+                QtWidgets.QMessageBox.information(self, "Sucesso", "Dados exportados com sucesso!")
+        except Exception as e:
+            logging.error(f"Erro ao exportar dados: {str(e)}")
+            QtWidgets.QMessageBox.critical(self, "Erro", f"Erro ao exportar dados: {str(e)}")
+
+    def carregar_dados(self, df):
+        try:
+            if not isinstance(df, pd.DataFrame):
+                QtWidgets.QMessageBox.warning(self, "Erro",
+                                              "Formato de dados inválido. Certifique-se de que o arquivo é um DataFrame válido.")
+                return
+            df = df.dropna(how='all').reset_index(drop=True)
+            if df.empty:
+                QtWidgets.QMessageBox.information(self, "Info",
+                                                  "O arquivo carregado está vazio ou não contém dados válidos.")
+                self.df = pd.DataFrame()
+                self.df_original = pd.DataFrame()
+                self.tabela.setRowCount(0)
+                self.mostrar_mensagem_inicial()  # Atualizar a mensagem
+                return
+            expected_columns = ['produto', 'descrição do site', 'preço', 'site', 'loja']
+            colunas_df_lower = [str(col).lower() for col in df.columns]
+            col_map = {}
+            for expected in expected_columns:
+                encontrado = False
+                for i, col in enumerate(colunas_df_lower):
+                    if expected == col:
+                        col_map[expected] = df.columns[i]
+                        encontrado = True
+                        break
+                if not encontrado:
+                    QtWidgets.QMessageBox.warning(self, "Erro de Colunas",
+                                                  f"Coluna '{expected}' não encontrada no arquivo. Verifique o cabeçalho do arquivo.")
+                    return
+            new_df = pd.DataFrame()
+            for expected in expected_columns:
+                if col_map[expected] in df.columns:
+                    new_df[expected] = df[col_map[expected]]
+                else:
+                    new_df[expected] = pd.Series([''] * len(df), index=df.index)
+
+            # Tratamento melhorado para valores NaN
+            for col in new_df.columns:
+                if col == 'preço':
+                    # Para preços, mantém NaN para processamento posterior
+                    new_df[col] = new_df[col].fillna('')
+                else:
+                    # Para outras colunas, converte para string e preenche vazios
+                    new_df[col] = new_df[col].astype(str).fillna('')
+
+            self.df = new_df.copy()
+            self.df_original = new_df.copy()
+            self.tendencias = self.calcular_tendencias()
+            self.atualizar_tabela()
+            self.atualizar_dashboard()
+            self.mostrar_mensagem_inicial()  # Atualizar a mensagem após carregar os dados
+            QtWidgets.QMessageBox.information(self, "Sucesso",
+                                              f"Dados carregados com sucesso! Total de produtos: {len(self.df)}")
+        except Exception as e:
+            logging.error(f"Erro ao carregar dados: {str(e)}")
+            QtWidgets.QMessageBox.critical(self, "Erro",
+                                           f"Erro ao carregar dados: {str(e)}\nDetalhes: Verifique se o arquivo contém as colunas esperadas ('produto', 'descrição do site', 'preço', 'site', 'loja').")
+            self.mostrar_mensagem_inicial()  # Garantir que a mensagem seja atualizada em caso de erro
+
+    def calcular_tendencias(self):
+        tendencias = {}
+        try:
+            # Simulação de cálculo de tendência - Substituir por lógica real se necessário
+            for idx, row in self.df.iterrows():
+                preco = extrair_preco(row['preço'])
+                if preco is not None:
+                    # Simula uma pequena variação aleatória para definir tendência
+                    change = np.random.choice([-1, 0, 1], p=[0.3, 0.4, 0.3])
+                    if change > 0:
+                        tendencias[idx] = "🔺"
+                    elif change < 0:
+                        tendencias[idx] = "🔻"
+                    else:
+                        tendencias[idx] = "⚪"
+                else:
+                    tendencias[idx] = "⚪"
+                    logging.debug(f"Preço inválido na linha {idx}: {row['preço']}")
+        except Exception as e:
+            logging.error(f"Erro ao calcular tendências: {str(e)}")
+            QtWidgets.QMessageBox.critical(self, "Erro", f"Erro ao calcular tendências: {str(e)}")
+        return tendencias
+
+    def atualizar_tabela(self):
+        try:
+            self.tabela.setRowCount(len(self.df))
+            self.tabela.setColumnCount(6)
+            self.tabela.setHorizontalHeaderLabels(
+                ["PRODUTO", "DESCRIÇÃO DO SITE", "PREÇO", "SITE", "LOJA", "TENDÊNCIA"])
+
+            for i, row_tuple in enumerate(self.df.itertuples()):  # Usar itertuples para eficiência
+                # Correção: acessar corretamente as colunas
+                produto = str(getattr(row_tuple, 'produto', '') if hasattr(row_tuple, 'produto') else row_tuple[1])
+                # Correção para descrição - usar o nome correto da coluna
+                descricao = str(
+                    getattr(row_tuple, 'descrição_do_site', '') if hasattr(row_tuple, 'descrição_do_site') else
+                    getattr(row_tuple, '_2', ''))  # _2 é o índice da segunda coluna
+                preco_str = str(getattr(row_tuple, 'preço', '') if hasattr(row_tuple, 'preço') else row_tuple[3])
+                site = str(getattr(row_tuple, 'site', '') if hasattr(row_tuple, 'site') else row_tuple[4])
+                loja = str(getattr(row_tuple, 'loja', '') if hasattr(row_tuple, 'loja') else row_tuple[5])
+                idx = row_tuple.Index  # Índice original do DataFrame
+
+                item_produto = QtWidgets.QTableWidgetItem(produto)
+                item_produto.setFont(QtGui.QFont("Arial", 12, QtGui.QFont.Bold))
+                item_produto.setTextAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
+                self.tabela.setItem(i, 0, item_produto)
+
+                # Tratamento melhorado para descrição
+                if pd.isna(descricao) or descricao == 'nan' or descricao == '':
+                    descricao_display = "Sem descrição"
+                else:
+                    descricao_display = descricao[:50] + "..." if len(descricao) > 50 else descricao
+
+                item_desc = QtWidgets.QTableWidgetItem(descricao_display)
+                item_desc.setFont(QtGui.QFont("Arial", 11))
+                item_desc.setToolTip(descricao if descricao != "Sem descrição" else "Descrição não disponível")
+                item_desc.setTextAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
+                self.tabela.setItem(i, 1, item_desc)
+
+                preco = extrair_preco(preco_str)
+                item_preco = QtWidgets.QTableWidgetItem(f"R$ {preco:.2f}" if preco is not None else "N/A")
+                item_preco.setBackground(QtGui.QColor("#e6f3fa"))
+                item_preco.setForeground(
+                    QtGui.QColor("#06d6a0" if preco is not None and preco > 0 else "#ef476f"))  # Cor diferente para N/A
+                item_preco.setTextAlignment(QtCore.Qt.AlignCenter | QtCore.Qt.AlignVCenter)
+                self.tabela.setItem(i, 2, item_preco)
+
+                item_site = QtWidgets.QTableWidgetItem(site)
+                item_site.setTextAlignment(QtCore.Qt.AlignCenter | QtCore.Qt.AlignVCenter)
+                self.tabela.setItem(i, 3, item_site)
+
+                item_loja = QtWidgets.QTableWidgetItem(loja)
+                item_loja.setTextAlignment(QtCore.Qt.AlignCenter | QtCore.Qt.AlignVCenter)
+                self.tabela.setItem(i, 4, item_loja)
+
+                tendencia = self.tendencias.get(idx, "⚪")  # Usar índice original
+                item_tendencia = QtWidgets.QTableWidgetItem(tendencia if tendencia is not None else "⚪")
+                item_tendencia.setTextAlignment(QtCore.Qt.AlignCenter | QtCore.Qt.AlignVCenter)
+                self.tabela.setItem(i, 5, item_tendencia)
+
+            self.tabela.resizeRowsToContents()
+            header = self.tabela.horizontalHeader()
+            header.setSectionResizeMode(0, QtWidgets.QHeaderView.Fixed)
+            header.resizeSection(0, 150)
+            header.setSectionResizeMode(1, QtWidgets.QHeaderView.Stretch)
+            header.setSectionResizeMode(2, QtWidgets.QHeaderView.Fixed)
+            header.resizeSection(2, 120)
+            header.setSectionResizeMode(3, QtWidgets.QHeaderView.ResizeToContents)
+            header.setSectionResizeMode(4, QtWidgets.QHeaderView.ResizeToContents)
+            header.setSectionResizeMode(5, QtWidgets.QHeaderView.Fixed)
+            header.resizeSection(5, 80)
+        except AttributeError as ae:
+            logging.error(f"Erro de atributo ao atualizar tabela: {str(ae)}. Verifique os nomes das colunas.")
+            QtWidgets.QMessageBox.critical(self, "Erro",
+                                           f"Erro ao acessar coluna: {str(ae)}. Verifique se os nomes das colunas no arquivo correspondem a 'produto', 'descrição do site', 'preço', 'site', 'loja'.")
+        except Exception as e:
+            logging.error(f"Erro ao atualizar tabela: {str(e)}")
+            QtWidgets.QMessageBox.critical(self, "Erro", f"Erro ao atualizar tabela: {str(e)}")
+
+    def abrir_link(self, idx):
+        try:
+            # Mapeia o índice visual da tabela para o índice real do DataFrame
+            real_idx = self.df.index[idx]
+            url = self.df.loc[real_idx, 'site']
+            if url and isinstance(url, str) and url.startswith('http'):
+                QtGui.QDesktopServices.openUrl(QtCore.QUrl(url))
+            else:
+                QtWidgets.QMessageBox.information(self, "Info", "Nenhum link válido disponível para este produto.")
+        except IndexError:
+            logging.error(f"Índice da tabela {idx} fora do alcance do DataFrame.")
+            QtWidgets.QMessageBox.critical(self, "Erro", "Erro ao obter dados da linha selecionada.")
+        except Exception as e:
+            logging.error(f"Erro ao abrir link: {str(e)}")
+            QtWidgets.QMessageBox.critical(self, "Erro", f"Erro ao abrir link: {str(e)}")
+
+    def atualizar_dashboard(self):
+        try:
+            num_produtos = len(self.df)
+            self.total_label.setText(f"🏷️ Total de Produtos: {num_produtos}")
+            dashboard_layout = self.dashboard_widget.layout()
+            if dashboard_layout:
+                # Encontra o canvas existente pelo tipo (pode ser mais robusto)
+                old_canvas = None
+                for i in range(dashboard_layout.count()):
+                    widget = dashboard_layout.itemAt(i).widget()
+                    if isinstance(widget, FigureCanvas):
+                        old_canvas = widget
+                        break
+
+                if old_canvas:
+                    new_canvas = self.criar_sparkline()
+                    dashboard_layout.replaceWidget(old_canvas, new_canvas)
+                    old_canvas.deleteLater()
+                else:
+                    logging.warning("Nenhum canvas antigo encontrado no dashboard. Adicionando novo.")
+                    dashboard_layout.addWidget(self.criar_sparkline())
+            else:
+                logging.error("Layout do dashboard não encontrado.")
+        except Exception as e:
+            logging.error(f"Erro ao atualizar dashboard: {str(e)}")
+
+    def filtrar_tabela(self, texto):
+        try:
+            if self.df.empty:
+                logging.debug("DataFrame vazio, não há dados para filtrar na tabela.")
+                self.mostrar_mensagem_inicial()  # Atualizar a mensagem
+                return
+
+            texto_lower = texto.lower()
+            num_linhas_df = len(self.df)
+            num_linhas_tabela = self.tabela.rowCount()
+
+            # Garante que a tabela reflita o DataFrame atual antes de filtrar
+            if num_linhas_df != num_linhas_tabela:
+                logging.warning(
+                    f"Inconsistência detectada: DataFrame tem {num_linhas_df} linhas, mas a tabela tem {num_linhas_tabela} linhas. Sincronizando...")
+                self.atualizar_tabela()
+                num_linhas_tabela = self.tabela.rowCount()  # Atualiza contagem
+
+            for i in range(num_linhas_tabela):
+                mostrar = False
+                if not texto_lower:
+                    mostrar = True
+                else:
+                    # Verifica colunas relevantes (Produto, Descrição, Site, Loja)
+                    for j in [0, 1, 3, 4]:
+                        item = self.tabela.item(i, j)
+                        if item is not None and item.text() and texto_lower in item.text().lower():
+                            mostrar = True
+                            break
+                self.tabela.setRowHidden(i, not mostrar)
+        except Exception as e:
+            logging.error(f"Erro ao filtrar tabela: {str(e)}")
+            self.mostrar_mensagem_inicial()  # Atualizar a mensagem em caso de erro
+
+    def abrir_filtros_avancados(self):
+        try:
+            if self.df_original.empty:  # Usa df_original para verificar se dados foram carregados
+                QtWidgets.QMessageBox.warning(self, "Atenção", "Nenhum dado carregado. Importe um arquivo primeiro.")
+                return
+            # Passa o df_original para o diálogo para ter todas as opções de loja
+            dialog = FiltroAvancadoDialog(self.df_original, self)
+            if dialog.exec_() == QtWidgets.QDialog.Accepted:
+                # A lógica de aplicação do filtro já está em aplicar_filtros_avancados
+                pass
+        except Exception as e:
+            logging.error(f"Erro ao abrir filtros avançados: {str(e)}")
+            QtWidgets.QMessageBox.critical(self, "Erro", f"Erro ao abrir filtros avançados: {str(e)}")
+
+    def aplicar_filtros_avancados(self, filtros):
+        try:
+            logging.debug("Iniciando aplicação de filtros avançados...")
+            if self.df_original.empty:
+                QtWidgets.QMessageBox.warning(self, "Atenção", "Nenhum dado para filtrar.")
+                return
+
+            df_filtrado = self.df_original.copy()  # Começa com os dados originais
+            filtros_aplicados = []
+
+            # Aplica filtro de preço mínimo
+            if filtros['preco_min']:
+                preco_min = extrair_preco(filtros['preco_min'])
+                if preco_min is not None:
+                    df_filtrado['preço_num'] = df_filtrado['preço'].apply(extrair_preco)
+                    df_filtrado = df_filtrado[
+                        df_filtrado['preço_num'].apply(lambda x: x is not None and x >= preco_min)]
+                    df_filtrado = df_filtrado.drop(columns=['preço_num'])
+                    filtros_aplicados.append(f"Preço mínimo: R$ {preco_min:.2f}")
+                else:
+                    logging.warning("Preço mínimo inválido, ignorando filtro.")
+
+            # Aplica filtro de preço máximo
+            if filtros['preco_max']:
+                preco_max = extrair_preco(filtros['preco_max'])
+                if preco_max is not None:
+                    df_filtrado['preço_num'] = df_filtrado['preço'].apply(extrair_preco)
+                    df_filtrado = df_filtrado[
+                        df_filtrado['preço_num'].apply(lambda x: x is not None and x <= preco_max)]
+                    df_filtrado = df_filtrado.drop(columns=['preço_num'])
+                    filtros_aplicados.append(f"Preço máximo: R$ {preco_max:.2f}")
+                else:
+                    logging.warning("Preço máximo inválido, ignorando filtro.")
+
+            # Aplica filtro de loja
+            if filtros['loja'] != "Todas as Lojas":
+                df_filtrado = df_filtrado[df_filtrado['loja'].str.lower() == filtros['loja'].lower()]
+                filtros_aplicados.append(f"Loja: {filtros['loja']}")
+
+            # Aplica filtro de marca (na descrição)
+            if filtros['marca']:
+                marca_lower = filtros['marca'].lower()
+                # Garante que a coluna existe e trata NaNs
+                if 'descrição do site' in df_filtrado.columns:
+                    df_filtrado = df_filtrado[
+                        df_filtrado['descrição do site'].str.lower().str.contains(marca_lower, na=False)]
+                    filtros_aplicados.append(f"Marca: {filtros['marca']}")
+                else:
+                    logging.warning("Coluna 'descrição do site' não encontrada para filtro de marca.")
+
+            # Aplica filtro de categoria
+            if filtros['categoria'] != "Todas":
+                df_filtrado['categoria_calculada'] = df_filtrado['produto'].apply(self.determinar_categoria)
+                df_filtrado = df_filtrado[df_filtrado['categoria_calculada'] == filtros['categoria']]
+                df_filtrado = df_filtrado.drop(columns=['categoria_calculada'])
+                filtros_aplicados.append(f"Categoria: {filtros['categoria']}")
+
+            # Aplica filtro de tendência (calculado sobre o df filtrado até aqui)
+            if filtros['tendencia'] != "Todas":
+                temp_tendencias = self.calcular_tendencias_df(df_filtrado)  # Calcula tendência no df filtrado
+                idx_filtrados = [idx for idx, tendencia in temp_tendencias.items() if
+                                 tendencia == filtros['tendencia'][len("Subindo "):]]  # Compara só o emoji
+                df_filtrado = df_filtrado.loc[df_filtrado.index.isin(idx_filtrados)]
+                filtros_aplicados.append(f"Tendência: {filtros['tendencia']}")
+
+            # Atualiza o DataFrame principal e recalcula as tendências finais
+            self.df = df_filtrado.reset_index(drop=True)
+            self.tendencias = self.calcular_tendencias()  # Recalcula no self.df final
+            self.atualizar_tabela()
+            self.atualizar_dashboard()
+
+            if filtros_aplicados:
+                msg = "Filtros aplicados:\n" + "\n".join(filtros_aplicados) + f"\nResultados: {len(self.df)} produtos."
+            else:
+                msg = "Nenhum filtro aplicado. Mostrando todos os dados originais."
+                self.df = self.df_original.copy()  # Restaura se nenhum filtro foi aplicado
+                self.tendencias = self.calcular_tendencias()
+                self.atualizar_tabela()
+                self.atualizar_dashboard()
+
+            QtWidgets.QMessageBox.information(self, "Filtros Aplicados", msg)
+            logging.debug("Filtros aplicados com sucesso.")
+            self.mostrar_mensagem_inicial()  # Atualizar a mensagem após aplicar filtros
+        except Exception as e:
+            logging.error(f"Erro ao aplicar filtros: {str(e)}")
+            QtWidgets.QMessageBox.critical(self, "Erro nos Filtros", f"Erro ao aplicar filtros: {str(e)}")
+            self.df = self.df_original.copy()  # Restaura em caso de erro
+            self.tendencias = self.calcular_tendencias()
+            self.atualizar_tabela()
+            self.atualizar_dashboard()
+            self.mostrar_mensagem_inicial()  # Atualizar a mensagem em caso de erro
+
+    # Função auxiliar para calcular tendências em um DataFrame específico
+    def calcular_tendencias_df(self, df_target):
+        tendencias = {}
+        try:
+            for idx, row in df_target.iterrows():
+                preco = extrair_preco(row['preço'])
+                if preco is not None:
+                    change = np.random.choice([-1, 0, 1], p=[0.3, 0.4, 0.3])
+                    if change > 0:
+                        tendencias[idx] = "🔺"
+                    elif change < 0:
+                        tendencias[idx] = "🔻"
+                    else:
+                        tendencias[idx] = "⚪"
+                else:
+                    tendencias[idx] = "⚪"
+        except Exception as e:
+            logging.error(f"Erro ao calcular tendências (auxiliar): {str(e)}")
+        return tendencias
+
+    def mostrar_analise_precos_detalhada(self):
+        try:
+            if self.df.empty:
+                QtWidgets.QMessageBox.warning(self, "Atenção", "Nenhum arquivo carregado ou dados filtrados.")
+                return
+
+            selecionadas = self.tabela.selectionModel().selectedRows()
+            if not selecionadas:
+                QtWidgets.QMessageBox.information(self, "Seleção Necessária", "Selecione a linha do produto na tabela.")
+                return
+
+            linha_idx_visual = selecionadas[0].row()
+
+            # Mapear índice visual para índice real do DataFrame filtrado (self.df)
+            if linha_idx_visual >= len(self.df):
+                QtWidgets.QMessageBox.critical(self, "Erro", "Índice da linha selecionada inválido.")
+                return
+            idx_real_df = self.df.index[linha_idx_visual]
+
+            # Obter dados do produto selecionado do DataFrame filtrado (self.df)
+            produto_selecionado = self.df.loc[idx_real_df]
+
+            # Abrir nova tela de precificação inteligente
+            dialog = TelaPrecificacaoInteligente(
+                produto_selecionado,
+                self.df_original,  # Passa dados completos para análise
+                self
+            )
+            dialog.exec_()
+
+        except IndexError:
+            logging.error("Erro de índice ao acessar dados do produto selecionado.")
+            QtWidgets.QMessageBox.critical(self, "Erro", "Erro ao obter dados da linha selecionada. Tente novamente.")
+        except KeyError as ke:
+            logging.error(f"Erro de chave ao acessar coluna: {str(ke)}")
+            QtWidgets.QMessageBox.critical(self, "Erro de Coluna",
+                                           f"Coluna não encontrada: {str(ke)}. Verifique o arquivo carregado.")
+        except Exception as e:
+            logging.error(f"Erro durante a análise de preços detalhada: {str(e)}")
+            QtWidgets.QMessageBox.critical(self, "Erro", f"Erro durante a análise detalhada: {str(e)}")
+
+    def mostrar_mensagem_inicial(self):
+        # Se a mensagem já existe, removê-la do layout
+        if self.mensagem_inicial is not None:
+            # Verifica se o widget ainda existe antes de tentar removê-lo
+            if self.mensagem_inicial.parent() is not None:
+                self.layout.removeWidget(self.mensagem_inicial)
+                self.mensagem_inicial.deleteLater()
+            self.mensagem_inicial = None
+
+        # Verificar se o DataFrame está vazio e exibir a mensagem apropriada
+        if self.df.empty:
+            # Verifica se o df_original também está vazio (nenhum dado carregado ainda)
+            if self.df_original.empty:
+                msg_texto = "⚠️ Nenhum dado carregado. Por favor, importe um arquivo CSV ou XLSX para começar."
+                msg_cor = "#ef476f"  # Vermelho para erro/aviso
+            else:
+                # Dados foram carregados, mas o filtro resultou em vazio
+                msg_texto = "ℹ️ Nenhum produto encontrado com os filtros aplicados. Tente limpar os filtros ou ajustar a busca."
+                msg_cor = "#0077b6"  # Azul para informação
+
+            self.mensagem_inicial = QtWidgets.QLabel(msg_texto)
+            self.mensagem_inicial.setStyleSheet(
+                f"color: {msg_cor}; font-size: 14px; text-align: center; padding: 10px;")
+            self.mensagem_inicial.setAlignment(QtCore.Qt.AlignCenter)
+            # Adiciona a mensagem abaixo da tabela (ou onde fizer mais sentido)
+            self.layout.insertWidget(self.layout.indexOf(self.tabela) + 1, self.mensagem_inicial)
+
+    def determinar_categoria(self, nome_produto):
+        nome_lower = normalizar_texto(nome_produto)
+        if not nome_lower: return "Outros"
+
+        # Palavras-chave mais específicas primeiro
+        if any(palavra in nome_lower for palavra in ['celular', 'smartphone', 'iphone']):
+            return "Celulares"
+        elif any(palavra in nome_lower for palavra in ['notebook', 'laptop', 'macbook']):
+            return "Notebooks"
+        elif any(palavra in nome_lower for palavra in ['mouse', 'teclado', 'headset', 'fone', 'webcam', 'monitor']):
+            return "Periféricos"
+        elif any(palavra in nome_lower for palavra in ['tv', 'televisor', 'smart tv', 'soundbar', 'home theater']):
+            return "Eletrônicos"
+        elif any(palavra in nome_lower for palavra in
+                 ['arroz', 'feijão', 'macarrão', 'óleo', 'leite', 'café', 'açúcar', 'biscoito', 'chocolate']):
+            return "Alimentos"
+        elif any(palavra in nome_lower for palavra in
+                 ['camiseta', 'calça', 'vestido', 'blusa', 'sapato', 'tênis', 'jaqueta', 'bermuda']):
+            return "Roupas"
+        # Categoria genérica por último
+        elif any(palavra in nome_lower for palavra in ['eletrônico', 'computador', 'tablet']):
+            return "Eletrônicos"
+        else:
+            return "Outros"
+
+    def obter_margens_categoria(self, categoria):
+        # Margens de exemplo - ajustar conforme necessário
+        margens = {
+            "Celulares": (0.15, 0.30),
+            "Notebooks": (0.20, 0.40),
+            "Periféricos": (0.30, 0.60),
+            "Eletrônicos": (0.25, 0.50),
+            "Alimentos": (0.10, 0.25),
+            "Roupas": (0.50, 1.20),  # Margens maiores para moda
+            "Outros": (0.30, 0.70)
+        }
+        return margens.get(categoria, (0.30, 0.70))  # Retorna margem padrão se categoria não encontrada
+
+
+if __name__ == "__main__":
+    try:
+        app = QtWidgets.QApplication(sys.argv)
+
+        # 1. Exibir diálogo de login
+        login_dialog = LoginDialog()
+        if login_dialog.exec_() == QtWidgets.QDialog.Accepted:
+            # 2. Se login OK, mostrar janela principal
+            window = VisualizadorProdutos()
+            window.show()
+            sys.exit(app.exec_())
+        else:
+            # 3. Se login falhar ou for cancelado, sair da aplicação
+            sys.exit(0)
+
+    except Exception as e:
+        logging.critical(f"Erro fatal durante a inicialização do aplicativo: {e}")
+        # Tenta mostrar uma mensagem de erro básica se a GUI falhar antes de iniciar
+        try:
+            error_app = QtWidgets.QApplication.instance()  # Tenta pegar a instância existente
+            if not error_app:
+                error_app = QtWidgets.QApplication(sys.argv)
+            QtWidgets.QMessageBox.critical(None, "Erro Fatal",
+                                           f"Ocorreu um erro crítico e a aplicação não pode iniciar:\n{e}")
+        except Exception as inner_e:
+            print(f"Erro crítico ao tentar exibir a mensagem de erro: {inner_e}")
